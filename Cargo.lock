@@ -2823,7 +2823,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "byte-unit",
- "chrono",
  "diesel",
  "diesel_migrations",
  "dotenv",

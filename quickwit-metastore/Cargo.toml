@@ -15,8 +15,7 @@ anyhow = "1.0"
 async-trait = "0.1"
 byte-unit = { version = "4", default-features = false, features = ["serde"] }
 time = { version = "0.3.9", features = ["std"] }
-chrono = { version = "0.4" }
-diesel = { version = "1.4", features = ["postgres", "chrono", "extras"], optional = true }
+diesel = { version = "1.4", features = ["postgres", "extras"], optional = true }
 diesel_migrations =  { version = "1.4", optional = true }
 futures = "0.3.17"
 itertools = "0.10.3"

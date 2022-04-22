@@ -20,7 +20,6 @@
 use std::convert::TryInto;
 use std::str::FromStr;
 
-use chrono::NaiveDateTime;
 use diesel::sql_types::{Nullable, Text};
 use tracing::error;
 
@@ -61,9 +60,9 @@ pub struct Index {
     // A JSON string containing all of the IndexMetadata.
     pub index_metadata_json: String,
     /// Timestamp for tracking when the split was created.
-    pub create_timestamp: NaiveDateTime,
+    pub create_timestamp: i64,
     /// Timestamp for tracking when the split was last updated.
-    pub update_timestamp: NaiveDateTime,
+    pub update_timestamp: i64,
 }
 
 impl Index {
@@ -78,8 +77,8 @@ impl Index {
         // `create_timestamp` and `update_timestamp` are stored in dedicated columns but are also
         // duplicated in [`IndexMetadata`]. We must override the duplicates with the authentic
         // values upon deserialization.
-        index_metadata.create_timestamp = self.create_timestamp.timestamp();
-        index_metadata.update_timestamp = self.update_timestamp.timestamp();
+        index_metadata.create_timestamp = self.create_timestamp;
+        index_metadata.update_timestamp = self.update_timestamp;
         Ok(index_metadata)
     }
 }
@@ -100,9 +99,9 @@ pub struct Split {
     /// If a timestamp field is available, the max timestamp of the split.
     pub time_range_end: Option<i64>,
     /// Timestamp for tracking when the split was created.
-    pub create_timestamp: NaiveDateTime,
+    pub create_timestamp: i64,
     /// Timestamp for tracking when the split was last updated.
-    pub update_timestamp: NaiveDateTime,
+    pub update_timestamp: i64,
     /// A list of tags for categorizing and searching group of splits.
     pub tags: Vec<String>,
     // The split's metadata serialized as a JSON string.
@@ -156,9 +155,9 @@ impl TryInto<QuickwitSplit> for Split {
         let mut split_metadata = self.split_metadata()?;
         // `create_timestamp` is duplicated in `SplitMetadata` and needs to be overridden with the
         // "true" value stored in a column.
-        split_metadata.create_timestamp = self.create_timestamp.timestamp();
+        split_metadata.create_timestamp = self.create_timestamp;
         let split_state = self.split_state()?;
-        let update_timestamp = self.update_timestamp.timestamp();
+        let update_timestamp = self.update_timestamp;
         Ok(QuickwitSplit {
             split_metadata,
             split_state,

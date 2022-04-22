@@ -21,8 +21,8 @@ table! {
     indexes (index_id) {
         index_id -> Varchar,
         index_metadata_json -> Text,
-        create_timestamp -> Timestamp,
-        update_timestamp -> Timestamp,
+        create_timestamp -> BigInt,
+        update_timestamp -> BigInt,
     }
 }
 
@@ -32,8 +32,8 @@ table! {
         split_state -> Varchar,
         time_range_start -> Nullable<Int8>,
         time_range_end -> Nullable<Int8>,
-        create_timestamp -> Timestamp,
-        update_timestamp -> Timestamp,
+        create_timestamp -> BigInt,
+        update_timestamp -> BigInt,
         tags -> Array<Text>,
         split_metadata_json -> Text,
         index_id -> Varchar,
