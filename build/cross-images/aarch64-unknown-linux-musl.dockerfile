@@ -27,7 +27,7 @@ RUN echo "Building OpenSSL" && \
 
 RUN echo "Building zlib" && \
     cd /tmp && \
-    curl -fLO "http://zlib.net/zlib-$ZLIB_VERSION.tar.gz" && \
+    curl -fLO "https://zlib.net/fossils/zlib-$ZLIB_VERSION.tar.gz" && \
     tar xzf "zlib-$ZLIB_VERSION.tar.gz" && cd "zlib-$ZLIB_VERSION" && \
     AR=aarch64-linux-musl-ar CC=aarch64-linux-musl-gcc ./configure --static --prefix=/usr/local/aarch64-linux-musl && \
     make && make install && \
@@ -43,8 +43,21 @@ RUN echo "Building libpq" && \
     rm -r /tmp/*
         
 RUN apt-get update -y && \
-    apt-get install -y libpq-dev && \
+    apt-get install -y unzip libpq-dev && \
     rm -rf /var/lib/apt/lists/*
+
+RUN echo "Installing protoc" && \
+    curl -fLO "https://github.com/protocolbuffers/protobuf/releases/download/v3.20.1/protoc-3.20.1-linux-x86_64.zip" && \
+    unzip protoc-3.20.1-linux-x86_64.zip -d ./protoc/ && \
+    cp ./protoc/bin/protoc /usr/bin/protoc
+
+RUN echo "Installing rocksdb dependencies" && \
+    apt-get update && \ 
+    apt-get install -y libclang-3.9-dev clang-3.9 \
+    gcc-aarch64-linux-gnu g++-aarch64-linux-gnu && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN echo "Cleaning up" && rm -Rf ./*
 
 ENV AARCH64_UNKNOWN_LINUX_MUSL_OPENSSL_STATIC=1 \
     CC=aarch64-linux-musl-gcc \
@@ -60,4 +73,6 @@ ENV AARCH64_UNKNOWN_LINUX_MUSL_OPENSSL_STATIC=1 \
     PQ_LIB_STATIC_AARCH64_UNKNOWN_LINUX_MUSL=1 \
     TARGET=aarch64-unknown-linux-musl \
     AARCH64_UNKNOWN_LINUX_MUSL_OPENSSL_DIR=/usr/local/aarch64-linux-musl \
-    OPENSSL_ROOT_DIR=/usr/local/aarch64-linux-musl
+    OPENSSL_ROOT_DIR=/usr/local/aarch64-linux-musl \
+    PROTOC=/usr/bin/protoc \
+    PROTOC_INCLUDE=/usr/include
