@@ -37,5 +37,3 @@ ENV CC=musl-gcc \
     ROCKSDB_LIB_DIR=/usr/lib \
     ROCKSDB_STATIC=1 \
     #CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=/clink.sh
-
-
