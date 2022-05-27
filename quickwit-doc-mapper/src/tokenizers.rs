@@ -18,13 +18,17 @@
 // along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 use once_cell::sync::Lazy;
-use tantivy::tokenizer::{RawTokenizer, RemoveLongFilter, TextAnalyzer, TokenizerManager};
+use tantivy::tokenizer::{RawTokenizer, WhitespaceTokenizer, RemoveLongFilter, TextAnalyzer, TokenizerManager};
 
 fn get_quickwit_tokenizer_manager() -> TokenizerManager {
     let raw_tokenizer = TextAnalyzer::from(RawTokenizer).filter(RemoveLongFilter::limit(100));
 
+    // TODO eventually check for other restrictions
+    let custom_tokenizer = TextAnalyzer::from(WhitespaceTokenizer).filter(RemoveLongFilter::limit(100));
+
     let tokenizer_manager = TokenizerManager::default();
     tokenizer_manager.register("raw", raw_tokenizer);
+    tokenizer_manager.register("custom", custom_tokenizer);
     tokenizer_manager
 }
 
@@ -47,4 +51,18 @@ fn raw_tokenizer_test() {
     assert!(haiku_stream.advance());
     assert!(!haiku_stream.advance());
     assert!(!tokenizer.token_stream(my_long_text).advance());
+}
+
+#[test]
+fn custom_tokenizer_basic_test() {
+    let numbers = "255.255.255.255 test \n\ttest\t 27-05-2022 \t\t  \n \tat\r\n 02:51";
+    let tokenizer = get_quickwit_tokenizer_manager().get("custom").unwrap();
+    let mut token_stream = tokenizer.token_stream(numbers);
+    let array_ref: [&str; 6] = ["255.255.255.255", "test", "test", "27-05-2022", "at", "02:51"];
+
+    for i in 0..6 {
+        let ref_token = array_ref[i];
+        assert!(token_stream.advance(), "panicked at advanced");
+        assert_eq!(&token_stream.token().text, ref_token);
+    }
 }
