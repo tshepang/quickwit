@@ -18,13 +18,13 @@
 // along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 use once_cell::sync::Lazy;
-use tantivy::tokenizer::{RawTokenizer, WhitespaceTokenizer, RemoveLongFilter, TextAnalyzer, TokenizerManager};
+use tantivy::tokenizer::{RawTokenizer, SimpleTokenizer, RemoveLongFilter, TextAnalyzer, TokenizerManager};
 
 fn get_quickwit_tokenizer_manager() -> TokenizerManager {
     let raw_tokenizer = TextAnalyzer::from(RawTokenizer).filter(RemoveLongFilter::limit(100));
 
     // TODO eventually check for other restrictions
-    let custom_tokenizer = TextAnalyzer::from(WhitespaceTokenizer).filter(RemoveLongFilter::limit(100));
+    let custom_tokenizer = TextAnalyzer::from(SimpleTokenizer).filter(RemoveLongFilter::limit(100));
 
     let tokenizer_manager = TokenizerManager::default();
     tokenizer_manager.register("raw", raw_tokenizer);
@@ -65,4 +65,22 @@ fn custom_tokenizer_basic_test() {
         assert!(token_stream.advance(), "panicked at advanced");
         assert_eq!(&token_stream.token().text, ref_token);
     }
+}
+
+// The only difference with the default tantivy is within numbers, this test is
+// to check if the behaviour is affected
+#[test]
+fn custom_tokenizer_compare_with_simple() {
+    let test_string = "this,is,the,test 42 here\n3932\t20dk";
+    let tokenizer = get_quickwit_tokenizer_manager().get("custom").unwrap();
+    let ref_tokenizer = TextAnalyzer::from(SimpleTokenizer);
+    let mut token_stream = tokenizer.token_stream(test_string);
+    let mut ref_token_stream = ref_tokenizer.token_stream(test_string);
+
+    while token_stream.advance() && ref_token_stream.advance()
+    {
+        assert_eq!(&token_stream.token().text, &ref_token_stream.token().text);
+    }
+
+    assert!(!(token_stream.advance() || ref_token_stream.advance()));
 }
