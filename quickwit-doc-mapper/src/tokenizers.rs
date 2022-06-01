@@ -17,14 +17,76 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <http://www.gnu.org/licenses/>.
 
+use regex::Regex;
 use once_cell::sync::Lazy;
-use tantivy::tokenizer::{RawTokenizer, SimpleTokenizer, RemoveLongFilter, TextAnalyzer, TokenizerManager};
+use tantivy::tokenizer::{RawTokenizer, RemoveLongFilter, TextAnalyzer, TokenizerManager, Token, TokenStream, Tokenizer, BoxTokenStream};
+use std::str::CharIndices;
+
+/// Tokenize the text without splitting on ".", "-" and "_" in numbers.
+#[derive(Clone)]
+pub struct CustomTokenizer;
+
+pub struct CustomTokenStream<'a> {
+    text: &'a str,
+    chars: CharIndices<'a>,
+    token: Token,
+}
+
+impl Tokenizer for CustomTokenizer {
+    fn token_stream<'a>(&self, text: &'a str) -> BoxTokenStream<'a> {
+        BoxTokenStream::from(CustomTokenStream {
+            text,
+            chars: text.char_indices(),
+            token: Token::default(),
+        })
+    }
+}
+
+impl<'a> CustomTokenStream<'a> {
+    fn search_token_end(&mut self) -> usize {
+        // This regex is meant to match the token with a series of digits seperated by "_ - : ."
+        let number = Regex::new(r"\d{1,3}[_.:-]*.");
+
+        // This is the default case as seen in tantivy's SimpleTokenizer implementation.
+        (&mut self.chars)
+            .filter(|&(_, ref c)| !c.is_alphanumeric())
+            .map(|(offset, _)| offset)
+            .next()
+            .unwrap_or_else(|| self.text.len())
+    }
+}
+
+impl<'a> TokenStream for CustomTokenStream<'a> {
+    fn advance(&mut self) -> bool {
+        self.token.text.clear();
+        self.token.position = self.token.position.wrapping_add(1);
+        while let Some((offset_from, c)) = self.chars.next() {
+            if c.is_alphanumeric() {
+                let offset_to = self.search_token_end();
+                self.token.offset_from = offset_from;
+                self.token.offset_to = offset_to;
+                self.token.text.push_str(&self.text[offset_from..offset_to]);
+                return true;
+            }
+        }
+        false
+    }
+
+    fn token(&self) -> &Token {
+        &self.token
+    }
+
+    fn token_mut(&mut self) -> &mut Token {
+        &mut self.token
+    }
+}
 
 fn get_quickwit_tokenizer_manager() -> TokenizerManager {
     let raw_tokenizer = TextAnalyzer::from(RawTokenizer).filter(RemoveLongFilter::limit(100));
 
     // TODO eventually check for other restrictions
-    let custom_tokenizer = TextAnalyzer::from(SimpleTokenizer).filter(RemoveLongFilter::limit(100));
+    // FIXME Filters are limited since we need to change the way we split tokens, so we need to implement Tokenizer
+    let custom_tokenizer = TextAnalyzer::from(CustomTokenizer).filter(RemoveLongFilter::limit(100));
 
     let tokenizer_manager = TokenizerManager::default();
     tokenizer_manager.register("raw", raw_tokenizer);
@@ -40,7 +102,7 @@ pub static QUICKWIT_TOKENIZER_MANAGER: Lazy<TokenizerManager> =
 fn raw_tokenizer_test() {
     let my_haiku = r#"
         white sandy beach
-        a strong wind is coming 
+        a strong wind is coming
         sand in my face
         "#;
     let my_long_text = "a text, that is just too long, no one will type it, no one will like it, \
