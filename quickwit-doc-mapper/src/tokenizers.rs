@@ -44,12 +44,16 @@ impl Tokenizer for CustomTokenizer {
 
 impl<'a> CustomTokenStream<'a> {
     fn search_token_end(&mut self) -> usize {
-        // This regex is meant to match the token with a series of digits seperated by "_ - : ."
-        let number = Regex::new(r"\d{1,3}[_.:-]*.");
-
-        // This is the default case as seen in tantivy's SimpleTokenizer implementation.
         (&mut self.chars)
             .filter(|&(_, ref c)| !c.is_alphanumeric())
+            .map(|(offset, _)| offset)
+            .next()
+            .unwrap_or_else(|| self.text.len())
+    }
+
+    fn search_number_end(&mut self) -> usize {
+        (&mut self.chars)
+            .filter(|&(_, ref c)| c.is_ascii_whitespace())
             .map(|(offset, _)| offset)
             .next()
             .unwrap_or_else(|| self.text.len())
@@ -61,11 +65,32 @@ impl<'a> TokenStream for CustomTokenStream<'a> {
         self.token.text.clear();
         self.token.position = self.token.position.wrapping_add(1);
         while let Some((offset_from, c)) = self.chars.next() {
-            if c.is_alphanumeric() {
-                let offset_to = self.search_token_end();
+            // If the token starts with a number, do not split on punctuation and check if the whole sequence
+            // should be kept (e.g an ip address), if the token does not match, we call search token end
+            if c.is_numeric() {
+                let number = Regex::new(r"\d{1,3}[_.:-]*.").unwrap();
+                let mut offset_to = self.search_number_end();
+                // FIXME for now, sequences of numbers and separations finished with random chars
+                // FIXME would not work ("192.102.93.203,,,,,," would not be recognized)
+                if !number.is_match(&self.text[offset_from..offset_to]) {
+                    offset_to = self.search_token_end();
+                }
+
+                // TODO refactor this
                 self.token.offset_from = offset_from;
                 self.token.offset_to = offset_to;
                 self.token.text.push_str(&self.text[offset_from..offset_to]);
+
+                return true;
+            }
+            else if c.is_alphabetic() {
+                // Read a token until next white space.
+                let offset_to = self.search_token_end();
+
+                self.token.offset_from = offset_from;
+                self.token.offset_to = offset_to;
+                self.token.text.push_str(&self.text[offset_from..offset_to]);
+
                 return true;
             }
         }
@@ -115,34 +140,88 @@ fn raw_tokenizer_test() {
     assert!(!tokenizer.token_stream(my_long_text).advance());
 }
 
-#[test]
-fn custom_tokenizer_basic_test() {
-    let numbers = "255.255.255.255 test \n\ttest\t 27-05-2022 \t\t  \n \tat\r\n 02:51";
-    let tokenizer = get_quickwit_tokenizer_manager().get("custom").unwrap();
-    let mut token_stream = tokenizer.token_stream(numbers);
-    let array_ref: [&str; 6] = ["255.255.255.255", "test", "test", "27-05-2022", "at", "02:51"];
+#[cfg(test)]
+mod tests {
+    use crate::tokenizers::get_quickwit_tokenizer_manager;
+    use tantivy::tokenizer::{TextAnalyzer, SimpleTokenizer};
 
-    for i in 0..6 {
-        let ref_token = array_ref[i];
-        assert!(token_stream.advance(), "panicked at advanced");
-        assert_eq!(&token_stream.token().text, ref_token);
-    }
-}
+    #[test]
+    fn custom_tokenizer_basic_test() {
+        let numbers = "255.255.255.255 test \n\ttest\t 27-05-2022 \t\t  \n \tat\r\n 02:51";
+        let tokenizer = get_quickwit_tokenizer_manager().get("custom").unwrap();
+        let mut token_stream = tokenizer.token_stream(numbers);
+        let array_ref: [&str; 6] = ["255.255.255.255", "test", "test", "27-05-2022", "at", "02:51"];
 
-// The only difference with the default tantivy is within numbers, this test is
-// to check if the behaviour is affected
-#[test]
-fn custom_tokenizer_compare_with_simple() {
-    let test_string = "this,is,the,test 42 here\n3932\t20dk";
-    let tokenizer = get_quickwit_tokenizer_manager().get("custom").unwrap();
-    let ref_tokenizer = TextAnalyzer::from(SimpleTokenizer);
-    let mut token_stream = tokenizer.token_stream(test_string);
-    let mut ref_token_stream = ref_tokenizer.token_stream(test_string);
-
-    while token_stream.advance() && ref_token_stream.advance()
-    {
-        assert_eq!(&token_stream.token().text, &ref_token_stream.token().text);
+        array_ref.iter().for_each(|ref_token| {
+            if token_stream.advance() {
+                assert_eq!(&token_stream.token().text, ref_token)
+            }
+            else {
+                assert!(false);
+            }
+        });
+        // for i in 0..6 {
+        //     let ref_token = array_ref[i];
+        //     assert!(token_stream.advance(), "panicked at advanced");
+        //     assert_eq!(&token_stream.token().text, ref_token);
+        // }
     }
 
-    assert!(!(token_stream.advance() || ref_token_stream.advance()));
+    // The only difference with the default tantivy is within numbers, this test is
+    // to check if the behaviour is affected
+    #[test]
+    fn custom_tokenizer_compare_with_simple() {
+        let test_string = "this,is,the,test 42 here\n3932\t20dk";
+        let tokenizer = get_quickwit_tokenizer_manager().get("custom").unwrap();
+        let ref_tokenizer = TextAnalyzer::from(SimpleTokenizer);
+        let mut token_stream = tokenizer.token_stream(test_string);
+        let mut ref_token_stream = ref_tokenizer.token_stream(test_string);
+
+        while token_stream.advance() && ref_token_stream.advance()
+        {
+            assert_eq!(&token_stream.token().text, &ref_token_stream.token().text);
+        }
+
+        assert!(!(token_stream.advance() || ref_token_stream.advance()));
+    }
+
+    // The tokenizer should still be able to work on normal texts
+    #[test]
+    fn custom_tokenizer_basic_text() {
+        let test_string = r#"
+        Aujourd'hui, maman est morte. Ou peut-
+    être hier, je ne sais pas. J'ai reçu un télégramme de l'asile : « Mère décédée. Enterrement demain. Seniments disingués.»
+    Cela ne veut rien dire. C'était peut-être
+    hier.
+        "#;
+        let tokenizer = get_quickwit_tokenizer_manager().get("custom").unwrap();
+        let ref_tokenizer = TextAnalyzer::from(SimpleTokenizer);
+        let mut token_stream = tokenizer.token_stream(test_string);
+        let mut ref_token_stream = ref_tokenizer.token_stream(test_string);
+
+        while token_stream.advance() && ref_token_stream.advance()
+        {
+            assert_eq!(&token_stream.token().text, &ref_token_stream.token().text);
+        }
+
+        assert!(!(token_stream.advance() || ref_token_stream.advance()));
+    }
+
+    #[test]
+    fn custom_tokenizer_log_test() {
+        let test_string = "Dec 10 06:55:48 LabSZ sshd[24200]: Failed password for invalid user webmaster from 173.234.31.186 port 38926 ssh2";
+        let array_ref : [&str; 17] = ["Dec", "10", "06:55:48", "LabSZ", "sshd", "24200", "Failed", "password", "for", "invalid", "user", "webmaster",
+            "from", "173.234.31.186", "port", "38926", "ssh2"];
+        let tokenizer = get_quickwit_tokenizer_manager().get("custom").unwrap();
+        let mut token_stream = tokenizer.token_stream(test_string);
+
+        array_ref.iter().for_each(|ref_token| {
+            if token_stream.advance() {
+                assert_eq!(&token_stream.token().text, ref_token)
+            }
+            else {
+                assert!(false);
+            }
+        });
+    }
 }
