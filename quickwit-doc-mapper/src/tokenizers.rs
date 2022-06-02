@@ -52,8 +52,9 @@ impl<'a> CustomTokenStream<'a> {
     }
 
     fn search_number_end(&mut self) -> usize {
+        let valid_chars_in_number = Regex::new("[-_.:a-zA-Z]").unwrap();
         (&mut self.chars)
-            .filter(|&(_, ref c)| c.is_ascii_whitespace())
+            .filter(|&(_, ref c)| c.is_ascii_whitespace() || !(c.is_alphanumeric() || valid_chars_in_number.is_match(&c.to_string())))
             .map(|(offset, _)| offset)
             .next()
             .unwrap_or_else(|| self.text.len())
@@ -61,7 +62,8 @@ impl<'a> CustomTokenStream<'a> {
 }
 
 impl<'a> TokenStream for CustomTokenStream<'a> {
-    fn advance(&mut self) -> bool {
+    fn
+    advance(&mut self) -> bool {
         self.token.text.clear();
         self.token.position = self.token.position.wrapping_add(1);
         while let Some((offset_from, c)) = self.chars.next() {
@@ -70,8 +72,6 @@ impl<'a> TokenStream for CustomTokenStream<'a> {
             if c.is_numeric() {
                 let number = Regex::new(r"\d{1,3}[_.:-]*.").unwrap();
                 let mut offset_to = self.search_number_end();
-                // FIXME for now, sequences of numbers and separations finished with random chars
-                // FIXME would not work ("192.102.93.203,,,,,," would not be recognized)
                 if !number.is_match(&self.text[offset_from..offset_to]) {
                     offset_to = self.search_token_end();
                 }
@@ -160,11 +160,6 @@ mod tests {
                 assert!(false);
             }
         });
-        // for i in 0..6 {
-        //     let ref_token = array_ref[i];
-        //     assert!(token_stream.advance(), "panicked at advanced");
-        //     assert_eq!(&token_stream.token().text, ref_token);
-        // }
     }
 
     // The only difference with the default tantivy is within numbers, this test is
