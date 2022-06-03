@@ -17,10 +17,13 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-use regex::Regex;
 use once_cell::sync::Lazy;
-use tantivy::tokenizer::{RawTokenizer, RemoveLongFilter, TextAnalyzer, TokenizerManager, Token, TokenStream, Tokenizer, BoxTokenStream};
+use regex::Regex;
 use std::str::CharIndices;
+use tantivy::tokenizer::{
+    BoxTokenStream, RawTokenizer, RemoveLongFilter, TextAnalyzer, Token, TokenStream, Tokenizer,
+    TokenizerManager,
+};
 
 /// Tokenize the text without splitting on ".", "-" and "_" in numbers.
 #[derive(Clone)]
@@ -54,7 +57,10 @@ impl<'a> CustomTokenStream<'a> {
     fn search_number_end(&mut self) -> usize {
         let valid_chars_in_number = Regex::new("[-_.:a-zA-Z]").unwrap();
         (&mut self.chars)
-            .filter(|&(_, ref c)| c.is_ascii_whitespace() || !(c.is_alphanumeric() || valid_chars_in_number.is_match(&c.to_string())))
+            .filter(|&(_, ref c)| {
+                c.is_ascii_whitespace()
+                    || !(c.is_alphanumeric() || valid_chars_in_number.is_match(&c.to_string()))
+            })
             .map(|(offset, _)| offset)
             .next()
             .unwrap_or_else(|| self.text.len())
@@ -62,8 +68,7 @@ impl<'a> CustomTokenStream<'a> {
 }
 
 impl<'a> TokenStream for CustomTokenStream<'a> {
-    fn
-    advance(&mut self) -> bool {
+    fn advance(&mut self) -> bool {
         self.token.text.clear();
         self.token.position = self.token.position.wrapping_add(1);
         while let Some((offset_from, c)) = self.chars.next() {
@@ -82,8 +87,7 @@ impl<'a> TokenStream for CustomTokenStream<'a> {
                 self.token.text.push_str(&self.text[offset_from..offset_to]);
 
                 return true;
-            }
-            else if c.is_alphabetic() {
+            } else if c.is_alphabetic() {
                 // Read a token until next white space.
                 let offset_to = self.search_token_end();
 
@@ -143,20 +147,26 @@ fn raw_tokenizer_test() {
 #[cfg(test)]
 mod tests {
     use crate::tokenizers::get_quickwit_tokenizer_manager;
-    use tantivy::tokenizer::{TextAnalyzer, SimpleTokenizer};
+    use tantivy::tokenizer::{SimpleTokenizer, TextAnalyzer};
 
     #[test]
     fn custom_tokenizer_basic_test() {
         let numbers = "255.255.255.255 test \n\ttest\t 27-05-2022 \t\t  \n \tat\r\n 02:51";
         let tokenizer = get_quickwit_tokenizer_manager().get("custom").unwrap();
         let mut token_stream = tokenizer.token_stream(numbers);
-        let array_ref: [&str; 6] = ["255.255.255.255", "test", "test", "27-05-2022", "at", "02:51"];
+        let array_ref: [&str; 6] = [
+            "255.255.255.255",
+            "test",
+            "test",
+            "27-05-2022",
+            "at",
+            "02:51",
+        ];
 
         array_ref.iter().for_each(|ref_token| {
             if token_stream.advance() {
                 assert_eq!(&token_stream.token().text, ref_token)
-            }
-            else {
+            } else {
                 assert!(false);
             }
         });
@@ -172,8 +182,7 @@ mod tests {
         let mut token_stream = tokenizer.token_stream(test_string);
         let mut ref_token_stream = ref_tokenizer.token_stream(test_string);
 
-        while token_stream.advance() && ref_token_stream.advance()
-        {
+        while token_stream.advance() && ref_token_stream.advance() {
             assert_eq!(&token_stream.token().text, &ref_token_stream.token().text);
         }
 
@@ -194,8 +203,7 @@ mod tests {
         let mut token_stream = tokenizer.token_stream(test_string);
         let mut ref_token_stream = ref_tokenizer.token_stream(test_string);
 
-        while token_stream.advance() && ref_token_stream.advance()
-        {
+        while token_stream.advance() && ref_token_stream.advance() {
             assert_eq!(&token_stream.token().text, &ref_token_stream.token().text);
         }
 
@@ -205,16 +213,32 @@ mod tests {
     #[test]
     fn custom_tokenizer_log_test() {
         let test_string = "Dec 10 06:55:48 LabSZ sshd[24200]: Failed password for invalid user webmaster from 173.234.31.186 port 38926 ssh2";
-        let array_ref : [&str; 17] = ["Dec", "10", "06:55:48", "LabSZ", "sshd", "24200", "Failed", "password", "for", "invalid", "user", "webmaster",
-            "from", "173.234.31.186", "port", "38926", "ssh2"];
+        let array_ref: [&str; 17] = [
+            "Dec",
+            "10",
+            "06:55:48",
+            "LabSZ",
+            "sshd",
+            "24200",
+            "Failed",
+            "password",
+            "for",
+            "invalid",
+            "user",
+            "webmaster",
+            "from",
+            "173.234.31.186",
+            "port",
+            "38926",
+            "ssh2",
+        ];
         let tokenizer = get_quickwit_tokenizer_manager().get("custom").unwrap();
         let mut token_stream = tokenizer.token_stream(test_string);
 
         array_ref.iter().for_each(|ref_token| {
             if token_stream.advance() {
                 assert_eq!(&token_stream.token().text, ref_token)
-            }
-            else {
+            } else {
                 assert!(false);
             }
         });
