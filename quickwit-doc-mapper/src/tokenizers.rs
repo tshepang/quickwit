@@ -192,7 +192,7 @@ mod tests {
     fn log_tokenizer_basic_text() {
         let test_string = r#"
         Aujourd'hui, maman est morte. Ou peut-
-    être hier, je ne sais pas. J'ai reçu un télégramme de l'asile : « Mère décédée. Enterrement demain. Seniments disingués.»
+    être hier, je ne sais pas. J'ai reçu un télégramme de l'asile : « Mère décédée. Enterrement demain. Sentiments distingués.»
     Cela ne veut rien dire. C'était peut-être
     hier.
         "#;
@@ -246,7 +246,7 @@ mod tests {
     fn log_tokenizer_log_test_2() {
         let test_string =
             "1331901000.000000    CHEt7z3AzG4gyCNgci    192.168.202.79    50465    192.168.229.251    80    1    HEAD 192.168.229.251    /DEASLog02.nsf    -    Mozilla/5.0";
-        let array_ref : [&str; 13] = [
+        let array_ref: [&str; 13] = [
             "1331901000.000000",
             "CHEt7z3AzG4gyCNgci",
             "192.168.202.79",
