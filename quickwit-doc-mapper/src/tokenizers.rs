@@ -27,17 +27,17 @@ use tantivy::tokenizer::{
 
 /// Tokenize the text without splitting on ".", "-" and "_" in numbers.
 #[derive(Clone)]
-pub struct CustomTokenizer;
+pub struct LogTokenizer;
 
-pub struct CustomTokenStream<'a> {
+pub struct LogTokenStream<'a> {
     text: &'a str,
     chars: CharIndices<'a>,
     token: Token,
 }
 
-impl Tokenizer for CustomTokenizer {
+impl Tokenizer for LogTokenizer {
     fn token_stream<'a>(&self, text: &'a str) -> BoxTokenStream<'a> {
-        BoxTokenStream::from(CustomTokenStream {
+        BoxTokenStream::from(LogTokenStream {
             text,
             chars: text.char_indices(),
             token: Token::default(),
@@ -45,7 +45,7 @@ impl Tokenizer for CustomTokenizer {
     }
 }
 
-impl<'a> CustomTokenStream<'a> {
+impl<'a> LogTokenStream<'a> {
     fn search_token_end(&mut self) -> usize {
         (&mut self.chars)
             .filter(|&(_, ref c)| !c.is_alphanumeric())
@@ -67,7 +67,7 @@ impl<'a> CustomTokenStream<'a> {
     }
 }
 
-impl<'a> TokenStream for CustomTokenStream<'a> {
+impl<'a> TokenStream for LogTokenStream<'a> {
     fn advance(&mut self) -> bool {
         self.token.text.clear();
         self.token.position = self.token.position.wrapping_add(1);
@@ -75,7 +75,7 @@ impl<'a> TokenStream for CustomTokenStream<'a> {
             // If the token starts with a number, do not split on punctuation and check if the whole sequence
             // should be kept (e.g an ip address), if the token does not match, we call search token end
             if c.is_numeric() {
-                let number = Regex::new(r"\d{1,3}[_.:-]*.").unwrap();
+                let number = Regex::new(r"\d{1,3}[_.:-]*").unwrap();
                 let mut offset_to = self.search_number_end();
                 if !number.is_match(&self.text[offset_from..offset_to]) {
                     offset_to = self.search_token_end();
@@ -88,7 +88,6 @@ impl<'a> TokenStream for CustomTokenStream<'a> {
 
                 return true;
             } else if c.is_alphabetic() {
-                // Read a token until next white space.
                 let offset_to = self.search_token_end();
 
                 self.token.offset_from = offset_from;
@@ -114,12 +113,11 @@ fn get_quickwit_tokenizer_manager() -> TokenizerManager {
     let raw_tokenizer = TextAnalyzer::from(RawTokenizer).filter(RemoveLongFilter::limit(100));
 
     // TODO eventually check for other restrictions
-    // FIXME Filters are limited since we need to change the way we split tokens, so we need to implement Tokenizer
-    let custom_tokenizer = TextAnalyzer::from(CustomTokenizer).filter(RemoveLongFilter::limit(100));
+    let log_tokenizer = TextAnalyzer::from(LogTokenizer).filter(RemoveLongFilter::limit(100));
 
     let tokenizer_manager = TokenizerManager::default();
     tokenizer_manager.register("raw", raw_tokenizer);
-    tokenizer_manager.register("custom", custom_tokenizer);
+    tokenizer_manager.register("log", log_tokenizer);
     tokenizer_manager
 }
 
@@ -150,9 +148,9 @@ mod tests {
     use tantivy::tokenizer::{SimpleTokenizer, TextAnalyzer};
 
     #[test]
-    fn custom_tokenizer_basic_test() {
+    fn log_tokenizer_basic_test() {
         let numbers = "255.255.255.255 test \n\ttest\t 27-05-2022 \t\t  \n \tat\r\n 02:51";
-        let tokenizer = get_quickwit_tokenizer_manager().get("custom").unwrap();
+        let tokenizer = get_quickwit_tokenizer_manager().get("log").unwrap();
         let mut token_stream = tokenizer.token_stream(numbers);
         let array_ref: [&str; 6] = [
             "255.255.255.255",
@@ -175,9 +173,9 @@ mod tests {
     // The only difference with the default tantivy is within numbers, this test is
     // to check if the behaviour is affected
     #[test]
-    fn custom_tokenizer_compare_with_simple() {
+    fn log_tokenizer_compare_with_simple() {
         let test_string = "this,is,the,test 42 here\n3932\t20dk";
-        let tokenizer = get_quickwit_tokenizer_manager().get("custom").unwrap();
+        let tokenizer = get_quickwit_tokenizer_manager().get("log").unwrap();
         let ref_tokenizer = TextAnalyzer::from(SimpleTokenizer);
         let mut token_stream = tokenizer.token_stream(test_string);
         let mut ref_token_stream = ref_tokenizer.token_stream(test_string);
@@ -191,14 +189,14 @@ mod tests {
 
     // The tokenizer should still be able to work on normal texts
     #[test]
-    fn custom_tokenizer_basic_text() {
+    fn log_tokenizer_basic_text() {
         let test_string = r#"
         Aujourd'hui, maman est morte. Ou peut-
     être hier, je ne sais pas. J'ai reçu un télégramme de l'asile : « Mère décédée. Enterrement demain. Seniments disingués.»
     Cela ne veut rien dire. C'était peut-être
     hier.
         "#;
-        let tokenizer = get_quickwit_tokenizer_manager().get("custom").unwrap();
+        let tokenizer = get_quickwit_tokenizer_manager().get("log").unwrap();
         let ref_tokenizer = TextAnalyzer::from(SimpleTokenizer);
         let mut token_stream = tokenizer.token_stream(test_string);
         let mut ref_token_stream = ref_tokenizer.token_stream(test_string);
@@ -211,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_tokenizer_log_test() {
+    fn log_tokenizer_log_test() {
         let test_string = "Dec 10 06:55:48 LabSZ sshd[24200]: Failed password for invalid user webmaster from 173.234.31.186 port 38926 ssh2";
         let array_ref: [&str; 17] = [
             "Dec",
@@ -232,7 +230,38 @@ mod tests {
             "38926",
             "ssh2",
         ];
-        let tokenizer = get_quickwit_tokenizer_manager().get("custom").unwrap();
+        let tokenizer = get_quickwit_tokenizer_manager().get("log").unwrap();
+        let mut token_stream = tokenizer.token_stream(test_string);
+
+        array_ref.iter().for_each(|ref_token| {
+            if token_stream.advance() {
+                assert_eq!(&token_stream.token().text, ref_token)
+            } else {
+                assert!(false);
+            }
+        });
+    }
+
+    #[test]
+    fn log_tokenizer_log_test_2() {
+        let test_string =
+            "1331901000.000000    CHEt7z3AzG4gyCNgci    192.168.202.79    50465    192.168.229.251    80    1    HEAD 192.168.229.251    /DEASLog02.nsf    -    Mozilla/5.0";
+        let array_ref : [&str; 13] = [
+            "1331901000.000000",
+            "CHEt7z3AzG4gyCNgci",
+            "192.168.202.79",
+            "50465",
+            "192.168.229.251",
+            "80",
+            "1",
+            "HEAD",
+            "192.168.229.251",
+            "DEASLog02",
+            "nsf",
+            "Mozilla",
+            "5.0",
+        ];
+        let tokenizer = get_quickwit_tokenizer_manager().get("log").unwrap();
         let mut token_stream = tokenizer.token_stream(test_string);
 
         array_ref.iter().for_each(|ref_token| {
