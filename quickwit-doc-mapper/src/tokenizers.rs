@@ -25,6 +25,8 @@ use tantivy::tokenizer::{
     TokenizerManager,
 };
 
+static VALID_CHAR_IN_NUMBER : Lazy<Regex> = Lazy::new(|| Regex::new("[-_.:a-zA-Z]").unwrap());
+
 /// Tokenize the text without splitting on ".", "-" and "_" in numbers.
 #[derive(Clone)]
 pub struct LogTokenizer;
@@ -54,16 +56,21 @@ impl<'a> LogTokenStream<'a> {
             .unwrap_or_else(|| self.text.len())
     }
 
-    fn search_number_end(&mut self) -> usize {
-        let valid_chars_in_number = Regex::new("[-_.:a-zA-Z]").unwrap();
+    fn handle_chars_in_number(&mut self) -> usize {
         (&mut self.chars)
             .filter(|&(_, ref c)| {
                 c.is_ascii_whitespace()
-                    || !(c.is_alphanumeric() || valid_chars_in_number.is_match(&c.to_string()))
+                    || !(c.is_alphanumeric() || VALID_CHAR_IN_NUMBER.is_match(&c.to_string()))
             })
             .map(|(offset, _)| offset)
             .next()
             .unwrap_or_else(|| self.text.len())
+    }
+
+    fn push_token(&mut self, offset_from : usize, offset_to : usize) -> () {
+        self.token.offset_from = offset_from;
+        self.token.offset_to = offset_to;
+        self.token.text.push_str(&self.text[offset_from..offset_to]);
     }
 }
 
@@ -72,31 +79,21 @@ impl<'a> TokenStream for LogTokenStream<'a> {
         self.token.text.clear();
         self.token.position = self.token.position.wrapping_add(1);
         while let Some((offset_from, c)) = self.chars.next() {
-            // If the token starts with a number, do not split on punctuation and check if the whole sequence
-            // should be kept (e.g an ip address), if the token does not match, we call search token end
+            // if the token starts with a number, it must be handled differently
             if c.is_numeric() {
-                let number = Regex::new(r"\d{1,3}[_.:-]*").unwrap();
-                let mut offset_to = self.search_number_end();
-                if !number.is_match(&self.text[offset_from..offset_to]) {
-                    offset_to = self.search_token_end();
-                }
-
-                // TODO refactor this
-                self.token.offset_from = offset_from;
-                self.token.offset_to = offset_to;
-                self.token.text.push_str(&self.text[offset_from..offset_to]);
+                let offset_to = self.handle_chars_in_number();
+                self.push_token(offset_from, offset_to);
 
                 return true;
+
             } else if c.is_alphabetic() {
                 let offset_to = self.search_token_end();
-
-                self.token.offset_from = offset_from;
-                self.token.offset_to = offset_to;
-                self.token.text.push_str(&self.text[offset_from..offset_to]);
+                self.push_token(offset_from, offset_to);
 
                 return true;
             }
         }
+
         false
     }
 
@@ -174,7 +171,7 @@ mod tests {
     // to check if the behaviour is affected
     #[test]
     fn log_tokenizer_compare_with_simple() {
-        let test_string = "this,is,the,test 42 here\n3932\t20dk";
+        let test_string = "this,is,the,test 42 here\n3932\t20dk,3093raopxa'wd";
         let tokenizer = get_quickwit_tokenizer_manager().get("log").unwrap();
         let ref_tokenizer = TextAnalyzer::from(SimpleTokenizer);
         let mut token_stream = tokenizer.token_stream(test_string);
