@@ -32,16 +32,19 @@ use quickwit_config::{
 use quickwit_ingest_api::IngestApiService;
 use quickwit_metastore::{IndexMetadata, Metastore, MetastoreError};
 use quickwit_proto::ingest_api::CreateQueueIfNotExistsRequest;
-use quickwit_storage::{StorageResolverError, StorageUriResolver};
+use quickwit_storage::{StorageResolverError, StorageUriResolver, Storage};
 use serde::Serialize;
 use thiserror::Error;
 use tracing::{error, info};
 
+use crate::{MergePolicy, StableMultitenantWithTimestampMergePolicy};
 use crate::models::{
     DetachPipeline, IndexingPipelineId, Observe, ObservePipeline, ShutdownPipeline,
-    SpawnMergePipeline, SpawnPipeline, SpawnPipelinesForIndex,
+    SpawnMergePipeline, SpawnPipeline, SpawnPipelinesForIndex, IndexingDirectory,
 };
-use crate::{IndexingPipeline, IndexingPipelineParams, IndexingStatistics};
+use crate::{IndexingPipeline, IndexingPipelineParams, IndexingStatistics, IndexingSplitStore, IndexingSplitStoreParams};
+
+use super::GarbageCollector;
 
 pub const INDEXING: &str = "indexing";
 
@@ -78,6 +81,7 @@ pub struct IndexingService {
     pipeline_handles: HashMap<IndexingPipelineId, ActorHandle<IndexingPipeline>>,
     state: IndexingServiceState,
     ingest_api_service: Option<Mailbox<IngestApiService>>,
+    garbage_collectors: HashMap<String, Mailbox<GarbageCollector>>,
 }
 
 impl IndexingService {
@@ -103,6 +107,7 @@ impl IndexingService {
             pipeline_handles: Default::default(),
             state: Default::default(),
             ingest_api_service,
+            garbage_collectors: Default::default(),
         }
     }
 
@@ -211,6 +216,10 @@ impl IndexingService {
             });
         }
         let storage = self.storage_resolver.resolve(&index_metadata.index_uri)?;
+        let garbage_collector_mailbox = self
+            .get_index_garbage_collector(index_metadata.clone(), storage.clone(), ctx)
+            .await?;
+
         let pipeline_params = IndexingPipelineParams::try_new(
             index_metadata,
             source,
@@ -219,6 +228,7 @@ impl IndexingService {
             self.split_store_max_num_splits,
             self.metastore.clone(),
             storage,
+            garbage_collector_mailbox,
         )
         .await
         .map_err(IndexingServiceError::InvalidParams)?;
@@ -293,6 +303,60 @@ impl IndexingService {
         let index_metadata = self.metastore.index_metadata(index_id).await?;
         Ok(index_metadata)
     }
+
+    async fn get_index_garbage_collector(
+        &mut self,
+        index_metadata: IndexMetadata,
+        storage: Arc<dyn Storage>,
+        ctx: &ActorContext<Self>,
+    ) -> Result<Mailbox<GarbageCollector>, IndexingServiceError> {
+        if let Some(garbage_collector_mailbox) = self.garbage_collectors.get(&index_metadata.index_id) {
+            return Ok(garbage_collector_mailbox.clone());
+        }
+
+        let indexing_directory_path = self.indexing_dir_path
+                .join(&index_metadata.index_id);
+        let indexing_directory = IndexingDirectory::create_in_dir(indexing_directory_path)
+            .await
+            .map_err(IndexingServiceError::InvalidParams)?;
+
+        let stable_multitenant_merge_policy = StableMultitenantWithTimestampMergePolicy {
+            demux_enabled: index_metadata.indexing_settings.demux_enabled,
+            demux_factor: index_metadata.indexing_settings.merge_policy.demux_factor,
+            demux_field_name: index_metadata.indexing_settings.demux_field.clone(),
+            merge_enabled: index_metadata.indexing_settings.merge_enabled,
+            merge_factor: index_metadata.indexing_settings.merge_policy.merge_factor,
+            max_merge_factor: index_metadata.indexing_settings.merge_policy.max_merge_factor,
+            split_num_docs_target: index_metadata.indexing_settings.split_num_docs_target,
+            ..Default::default()
+        };
+        let merge_policy: Arc<dyn MergePolicy> = Arc::new(stable_multitenant_merge_policy);
+
+        let split_store = IndexingSplitStore::create_with_local_store(
+            storage.clone(),
+            indexing_directory.cache_directory.as_path(),
+            IndexingSplitStoreParams {
+                max_num_bytes: self.split_store_max_num_bytes,
+                max_num_splits: self.split_store_max_num_splits,
+            },
+            merge_policy.clone(),
+        )
+        .map_err(|err| IndexingServiceError::InvalidParams(err.into()))?;
+
+        let garbage_collector = GarbageCollector::new(
+            index_metadata.index_id.clone(),
+            split_store.clone(),
+            self.metastore.clone(),
+        );
+        let (garbage_collector_mailbox, _) = ctx
+            .spawn_actor(garbage_collector)
+            .spawn(); 
+        
+        self.garbage_collectors.insert(index_metadata.index_id, garbage_collector_mailbox.clone());
+        
+        Ok(garbage_collector_mailbox.clone())
+    }
+
 }
 
 #[async_trait]

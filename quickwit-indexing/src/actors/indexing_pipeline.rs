@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use itertools::Itertools;
 use quickwit_actors::{
     create_mailbox, Actor, ActorContext, ActorExitStatus, ActorHandle, Handler, Health, KillSwitch,
-    QueueCapacity, Supervisable,
+    QueueCapacity, Supervisable, Mailbox,
 };
 use quickwit_config::{build_doc_mapper, IndexingSettings, SourceConfig};
 use quickwit_doc_mapper::DocMapper;
@@ -55,7 +55,7 @@ pub struct IndexingPipelineHandler {
     pub packager: ActorHandle<Packager>,
     pub uploader: ActorHandle<Uploader>,
     pub publisher: ActorHandle<Publisher>,
-    pub garbage_collector: ActorHandle<GarbageCollector>,
+    //pub garbage_collector: ActorHandle<GarbageCollector>,
 
     /// Merging pipeline subpipeline
     pub merge_planner: ActorHandle<MergePlanner>,
@@ -128,7 +128,7 @@ impl IndexingPipeline {
                 &handlers.packager,
                 &handlers.uploader,
                 &handlers.publisher,
-                &handlers.garbage_collector,
+               // &handlers.garbage_collector,
                 &handlers.merge_planner,
                 &handlers.merge_split_downloader,
                 &handlers.merge_executor,
@@ -229,15 +229,15 @@ impl IndexingPipeline {
             create_mailbox::<MergePlanner>("MergePlanner".to_string(), QueueCapacity::Unbounded);
 
         // Garbage colletor
-        let garbage_collector = GarbageCollector::new(
-            self.params.index_id.clone(),
-            split_store.clone(),
-            self.params.metastore.clone(),
-        );
-        let (garbage_collector_mailbox, garbage_collector_handler) = ctx
-            .spawn_actor(garbage_collector)
-            .set_kill_switch(self.kill_switch.clone())
-            .spawn();
+        // let garbage_collector = GarbageCollector::new(
+        //     self.params.index_id.clone(),
+        //     split_store.clone(),
+        //     self.params.metastore.clone(),
+        // );
+        // let (garbage_collector_mailbox, garbage_collector_handler) = ctx
+        //     .spawn_actor(garbage_collector)
+        //     .set_kill_switch(self.kill_switch.clone())
+        //     .spawn();
 
         // Merge publisher
         let merge_publisher = Publisher::new(
@@ -245,7 +245,7 @@ impl IndexingPipeline {
             self.params.source.source_id.clone(),
             self.params.metastore.clone(),
             merge_planner_mailbox.clone(),
-            garbage_collector_mailbox.clone(),
+            self.params.garbage_collector_mailbox.clone(),
             None,
         );
         let (merge_publisher_mailbox, merge_publisher_handler) = ctx
@@ -335,7 +335,7 @@ impl IndexingPipeline {
             self.params.source.source_id.clone(),
             self.params.metastore.clone(),
             merge_planner_mailbox,
-            garbage_collector_mailbox,
+            self.params.garbage_collector_mailbox.clone(),
             Some(source_mailbox.clone()),
         );
         let (publisher_mailbox, publisher_handler) = ctx
@@ -409,7 +409,7 @@ impl IndexingPipeline {
             packager: packager_handler,
             uploader: uploader_handler,
             publisher: publisher_handler,
-            garbage_collector: garbage_collector_handler,
+            //garbage_collector: garbage_collector_handler,
 
             merge_planner: merge_planner_handler,
             merge_split_downloader: merge_split_downloader_handler,
@@ -443,7 +443,7 @@ impl IndexingPipeline {
                 handlers.packager.kill(),
                 handlers.uploader.kill(),
                 handlers.publisher.kill(),
-                handlers.garbage_collector.kill(),
+                //handlers.garbage_collector.kill(),
                 handlers.merge_planner.kill(),
                 handlers.merge_split_downloader.kill(),
                 handlers.merge_executor.kill(),
@@ -557,6 +557,7 @@ pub struct IndexingPipelineParams {
     pub split_store_max_num_splits: usize,
     pub metastore: Arc<dyn Metastore>,
     pub storage: Arc<dyn Storage>,
+    pub garbage_collector_mailbox: Mailbox<GarbageCollector>,
 }
 
 impl IndexingPipelineParams {
@@ -568,6 +569,7 @@ impl IndexingPipelineParams {
         split_store_max_num_splits: usize,
         metastore: Arc<dyn Metastore>,
         storage: Arc<dyn Storage>,
+        garbage_collector_mailbox: Mailbox<GarbageCollector>,
     ) -> anyhow::Result<Self> {
         let doc_mapper = build_doc_mapper(
             &index_metadata.doc_mapping,
@@ -575,8 +577,8 @@ impl IndexingPipelineParams {
             &index_metadata.indexing_settings,
         )?;
         let indexing_directory_path = indexing_dir_path
-            .join(&index_metadata.index_id)
-            .join(&source.source_id);
+            .join(&index_metadata.index_id);
+            //.join(&source.source_id);
         let indexing_directory = IndexingDirectory::create_in_dir(indexing_directory_path).await?;
         Ok(Self {
             index_id: index_metadata.index_id,
@@ -588,6 +590,7 @@ impl IndexingPipelineParams {
             split_store_max_num_splits,
             metastore,
             storage,
+            garbage_collector_mailbox,
         })
     }
 }
@@ -597,7 +600,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use quickwit_actors::Universe;
+    use quickwit_actors::{Universe, create_test_mailbox};
     use quickwit_config::{IndexingSettings, SourceParams};
     use quickwit_doc_mapper::default_doc_mapper_for_tests;
     use quickwit_metastore::{IndexMetadata, MetastoreError, MockMetastore};
@@ -683,6 +686,7 @@ mod tests {
             source_id: "test-source".to_string(),
             source_params: SourceParams::file(PathBuf::from("data/test_corpus.json")),
         };
+        let (garbage_collector_mailbox, _) = create_test_mailbox();
         let indexing_pipeline_params = IndexingPipelineParams {
             index_id: index_id.to_string(),
             doc_mapper: Arc::new(default_doc_mapper_for_tests()),
@@ -693,6 +697,7 @@ mod tests {
             source: source_config,
             metastore: Arc::new(metastore),
             storage: Arc::new(RamStorage::default()),
+            garbage_collector_mailbox,
         };
         let pipeline = IndexingPipeline::new(indexing_pipeline_params);
         let (_pipeline_mailbox, pipeline_handler) = universe.spawn_actor(pipeline).spawn();
@@ -764,6 +769,7 @@ mod tests {
             source_id: "test-source".to_string(),
             source_params: SourceParams::file(PathBuf::from("data/test_corpus.json")),
         };
+        let (garbage_collector_mailbox, _) = create_test_mailbox();
         let pipeline_params = IndexingPipelineParams {
             index_id: "test-index".to_string(),
             doc_mapper: Arc::new(default_doc_mapper_for_tests()),
@@ -774,6 +780,7 @@ mod tests {
             source,
             metastore: Arc::new(metastore),
             storage: Arc::new(RamStorage::default()),
+            garbage_collector_mailbox,
         };
         let pipeline = IndexingPipeline::new(pipeline_params);
         let (_pipeline_mailbox, pipeline_handler) = universe.spawn_actor(pipeline).spawn();

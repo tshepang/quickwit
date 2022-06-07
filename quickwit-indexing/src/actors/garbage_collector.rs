@@ -61,6 +61,7 @@ pub struct GarbageCollector {
     split_store: IndexingSplitStore,
     metastore: Arc<dyn Metastore>,
     counters: GarbageCollectorCounters,
+    id: String,
 }
 
 impl GarbageCollector {
@@ -74,6 +75,7 @@ impl GarbageCollector {
             split_store,
             metastore,
             counters: GarbageCollectorCounters::default(),
+            id: ulid::Ulid::new().to_string(),
         }
     }
 }
@@ -107,8 +109,10 @@ impl Handler<Loop> for GarbageCollector {
         _: Loop,
         ctx: &ActorContext<Self>,
     ) -> Result<(), quickwit_actors::ActorExitStatus> {
-        info!("garbage-collect-operation");
+        info!(id=?self.id, "garbage-collect-operation");
         self.counters.num_passes += 1;
+
+        assert!(false);
 
         let deleted_file_entries = run_garbage_collect(
             &self.index_id,
