@@ -22,5 +22,11 @@ doc_mapping:
       type: text
       tokenizer: raw
 
+indexing_settings:
+  commit_timeout_secs: 3600
+  split_num_docs_target: 100000000
+  resources:
+    heap_size: 4G
+
 search_settings:
   default_search_fields: [title, body]

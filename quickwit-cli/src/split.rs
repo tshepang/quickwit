@@ -381,12 +381,14 @@ async fn describe_split_cli(args: DescribeSplitArgs) -> anyhow::Result<()> {
     let split_file = PathBuf::from(format!("{}.split", args.split_id));
     let (split_footer, _) = read_split_footer(index_storage, &split_file).await?;
     let stats = BundleDirectory::get_stats_split(split_footer.clone())?;
-    let hotcache_bytes = get_hotcache_from_split(split_footer)?;
     for (path, size) in stats {
-        let readable_size = size.file_size(file_size_opts::DECIMAL).unwrap();
+        let mut file_size_opts = file_size_opts::DECIMAL;
+        file_size_opts.fixed_at = file_size_opts::FixedAt::Mega;
+        let readable_size = size.file_size(file_size_opts).unwrap();
         println!("{:?} {}", path, readable_size);
     }
     if args.verbose {
+        let hotcache_bytes = get_hotcache_from_split(split_footer)?;
         let hotcache_stats = HotDirectory::get_stats_per_file(hotcache_bytes)?;
         for (path, size) in hotcache_stats {
             let readable_size = size.file_size(file_size_opts::DECIMAL).unwrap();

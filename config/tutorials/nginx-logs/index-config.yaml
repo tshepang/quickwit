@@ -1,0 +1,45 @@
+version: 0
+
+index_id: nginx-logs
+
+doc_mapping:
+  field_mappings:
+    - name: ip
+      type: text
+      tokenizer: raw
+    - name: datetime
+      type: i64
+      fast: true
+    - name: verb
+      type: text
+      tokenizer: raw
+    - name: path
+      type: text
+      tokenizer: default
+      record: position
+    - name: http_version
+      type: text
+      tokenizer: raw
+    - name: status_code
+      type: u64
+      fast: true
+    - name: num_bytes
+      type: u64
+      fast: true
+    - name: referer
+      type: text
+      tokenizer: default
+    - name: user_agent
+      type: text
+      tokenizer: default
+      record: position
+
+indexing_settings:
+  timestamp_field: datetime
+  commit_timeout_secs: 3600
+  split_num_docs_target: 100000000
+  resources:
+    heap_size: 4G
+
+search_settings:
+  default_search_fields: [verb, path]

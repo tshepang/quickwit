@@ -75,6 +75,12 @@ pub fn build_index_command<'a>() -> Command<'a> {
                     arg!(--"data-dir" <DATA_DIR> "Where data is persisted. Override data-dir defined in config file, default is `./qwdata`.")
                         .env("QW_DATA_DIR")
                         .required(false),
+                    arg!(--"index-id" <INDEX_ID> "Overrides index ID.")
+                        .required(false),
+                    arg!(--"docstore-blocksize" <BLOCKSIZE> "Overrides docstore block size.")
+                        .required(false),
+                    arg!(--"docstore-compression" <ALGORITHM> "Overrides docstore compression algorithm.")
+                        .required(false),
                     arg!(--overwrite "Overwrites pre-existing index.")
                         .required(false),
                 ])
@@ -193,6 +199,9 @@ pub struct CreateIndexArgs {
     pub index_config_uri: Uri,
     pub config_uri: Uri,
     pub data_dir: Option<PathBuf>,
+    pub index_id: Option<String>,
+    pub docstore_blocksize: Option<usize>,
+    pub docstore_compression: Option<String>,
     pub overwrite: bool,
 }
 
@@ -333,12 +342,21 @@ impl IndexCliCommand {
             .map(Uri::try_new)
             .expect("`config` is a required arg.")?;
         let data_dir = matches.value_of("data-dir").map(PathBuf::from);
+        let index_id = matches.value_of("index-id").map(String::from);
+        let docstore_blocksize = matches
+            .value_of("docstore-blocksize")
+            .map(|blocksize| blocksize.parse::<usize>())
+            .transpose()?;
+        let docstore_compression = matches.value_of("docstore-compression").map(String::from);
         let overwrite = matches.is_present("overwrite");
 
         Ok(Self::Create(CreateIndexArgs {
             config_uri,
             data_dir,
             index_config_uri,
+            index_id,
+            docstore_blocksize,
+            docstore_compression,
             overwrite,
         }))
     }
@@ -773,7 +791,20 @@ pub async fn create_index_cli(args: CreateIndexArgs) -> anyhow::Result<()> {
 
     let quickwit_config = load_quickwit_config(&args.config_uri, args.data_dir).await?;
     let file_content = load_file(&args.index_config_uri).await?;
-    let index_config = IndexConfig::load(&args.index_config_uri, file_content.as_slice()).await?;
+    let mut index_config =
+        IndexConfig::load(&args.index_config_uri, file_content.as_slice()).await?;
+    if let Some(index_id) = &args.index_id {
+        tracing::info!(index_id = %index_id, "Setting index ID from CLI override.");
+        index_config.index_id = index_id.clone();
+    }
+    if let Some(docstore_blocksize) = args.docstore_blocksize {
+        tracing::info!(blocksize = %docstore_blocksize, "Setting docstore blocksize from CLI override.");
+        index_config.indexing_settings.docstore_blocksize = docstore_blocksize;
+    }
+    if let Some(docstore_compression) = args.docstore_compression {
+        tracing::info!(algorithm = %docstore_compression, "Setting docstore compression algorithm from CLI override.");
+        index_config.indexing_settings.docstore_compression = docstore_compression.clone();
+    }
     let index_id = index_config.index_id.clone();
     let metastore_uri_resolver = quickwit_metastore_uri_resolver();
     let metastore = metastore_uri_resolver
