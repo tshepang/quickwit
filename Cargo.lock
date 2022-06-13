@@ -2561,6 +2561,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "futures",
+ "hyper",
  "hyper-rustls",
  "once_cell",
  "rand",

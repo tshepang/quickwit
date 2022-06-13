@@ -20,6 +20,7 @@ rusoto_kinesis = { version = "0.48", default-features = false, features = ["rust
 rusoto_s3 = { version = "0.48", default-features = false, features = ["rustls"] }
 tokio = "1.19"
 tracing = "0.1"
+hyper = { version = "0.14", features = ["stream", "server", "http1", "http2", "tcp", "client"] }
 hyper-rustls = "0.23"
 
 [features]

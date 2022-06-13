@@ -20,6 +20,7 @@
 use std::time::Duration;
 
 use anyhow::Context;
+use hyper::client::HttpConnector;
 use hyper_rustls::HttpsConnectorBuilder;
 use once_cell::sync::OnceCell;
 use rusoto_core::credential::{AutoRefreshingProvider, ChainProvider, ProvideAwsCredentials};
@@ -37,6 +38,11 @@ const CREDENTIAL_TIMEOUT: Duration = Duration::from_secs(5);
 /// Returns a hyper http client.
 pub fn get_http_client() -> HttpClient {
     let mut http_config: HttpConfig = HttpConfig::default();
+    let mut http_connector = HttpConnector::new();
+    // HttpConnector does not enforce http. HttpsConnector does.
+    http_connector.enforce_http(false);
+    // We set nodelay to avoid unwanted TCP delay for small packets
+    http_connector.set_nodelay(true);
     // We experience an issue similar to https://github.com/hyperium/hyper/issues/2312.
     // It seems like the setting below solved it.
     http_config.pool_idle_timeout(POOL_IDLE_TIMEOUT);
@@ -51,7 +57,7 @@ pub fn get_http_client() -> HttpClient {
         // (Besides, HTTP2 would be awesome but rusoto does not leverage
         // multiplexing anyway.)
         .enable_http1()
-        .build();
+        .wrap_connector(http_connector);
     HttpClient::from_connector_with_config(connector, http_config)
 }
 
