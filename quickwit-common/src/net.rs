@@ -17,7 +17,126 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-use std::net::{SocketAddr, TcpListener, ToSocketAddrs};
+use std::fmt::Display;
+use std::net::{IpAddr, SocketAddr, TcpListener};
+
+use anyhow::Context;
+use tokio::net::{lookup_host, ToSocketAddrs};
+
+/// Represents a host, i.e. an IP address (`127.0.0.1`) or a hostname (`localhost`).
+#[derive(Clone, Debug)]
+pub enum Host {
+    Hostname(String),
+    IpAddr(IpAddr),
+}
+
+impl Host {
+    /// Returns a resolved host, i.e. an IP address.
+    pub async fn resolve(&self) -> anyhow::Result<IpAddr> {
+        match self {
+            Host::IpAddr(ip_addr) => Ok(ip_addr.clone()),
+            Host::Hostname(hostname) => lookup_host(hostname.as_str())
+                .await
+                .with_context(|| format!("Failed to resolve hostname `{}`.", hostname))?
+                .next()
+                .map(|socket_addr| socket_addr.ip())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "DNS resolution did not yield any record for hostname `{}`.",
+                        hostname
+                    )
+                }),
+        }
+    }
+}
+
+impl Display for Host {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Host::Hostname(hostname) => hostname.fmt(formatter),
+            Host::IpAddr(ip_addr) => ip_addr.fmt(formatter),
+        }
+    }
+}
+
+/// Represents an address `<host>:<port>` where `host` can be an IP address or a hostname.
+#[derive(Clone, Debug)]
+pub struct HostAddr {
+    host: Host,
+    port: u16,
+}
+
+impl HostAddr {
+    /// Attempts to parse a `host_addr`.
+    /// If no port is defined, it just accepts the host and uses the given default port.
+    ///
+    /// This function supports:
+    /// - IPv4
+    /// - IPv4:port
+    /// - IPv6
+    /// - \[IPv6\]:port -- IpV6 contains colon. It is customary to require bracket for this reason.
+    /// - hostname
+    /// - hostname:port
+    pub fn parse_with_default_port(host_addr: &str, default_port: u16) -> anyhow::Result<Self> {
+        if let Ok(socket_addr) = host_addr.parse::<SocketAddr>() {
+            return Ok(Self {
+                host: Host::IpAddr(socket_addr.ip()),
+                port: socket_addr.port(),
+            });
+        }
+        if let Ok(ip_addr) = host_addr.parse::<IpAddr>() {
+            return Ok(Self {
+                host: Host::IpAddr(ip_addr),
+                port: default_port,
+            });
+        }
+        if let Some((hostname_str, port_str)) = host_addr.split_once(':') {
+            let port = port_str
+                .parse::<u16>()
+                .with_context(|| format!("Failed to parse host address: `{}`.", host_addr))?;
+            return Ok(Self {
+                host: Host::Hostname(hostname_str.to_string()),
+                port,
+            });
+        }
+        Ok(Self {
+            host: Host::Hostname(host_addr.to_string()),
+            port: default_port,
+        })
+    }
+
+    pub async fn to_socket_addr(&self) -> anyhow::Result<SocketAddr> {
+        self.host
+            .resolve()
+            .await
+            .map(|ip_addr| SocketAddr::new(ip_addr, self.port))
+    }
+}
+
+impl Display for HostAddr {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(formatter, "{}:{}", self.host, self.port)
+    }
+}
+
+impl PartialEq<&str> for HostAddr {
+    fn eq(&self, other: &&str) -> bool {
+        self.to_string() == other
+    }
+}
+
+impl PartialEq<String> for HostAddr {
+    fn eq(&self, other: &String) -> bool {
+        self.to_string() == other
+    }
+}
+
+impl Serialize for HostAddr {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where S: Serializer {
+        serializer.serialize_str(&self.to_string())
+    }
+}
 
 /// Finds a random available TCP port.
 pub fn find_available_tcp_port() -> anyhow::Result<u16> {
@@ -28,100 +147,46 @@ pub fn find_available_tcp_port() -> anyhow::Result<u16> {
 }
 
 /// Converts an object into a resolved `SocketAddr`.
-pub fn get_socket_addr<T: ToSocketAddrs + std::fmt::Debug>(addr: &T) -> anyhow::Result<SocketAddr> {
-    addr.to_socket_addrs()?
+pub async fn get_socket_addr<T: ToSocketAddrs + std::fmt::Debug>(
+    addr: &T,
+) -> anyhow::Result<SocketAddr> {
+    lookup_host(addr)
+        .await?
         .next()
         .ok_or_else(|| anyhow::anyhow!("Failed to resolve address `{:?}`.", addr))
-}
-
-/// Returns true if the socket addr is a valid socket address containing a port.
-///
-/// If the socket adddress looks invalid to begin with, we may return false or true.
-fn contains_port(addr: &str) -> bool {
-    // [IPv6]:port
-    if let Some((_, colon_port)) = addr[1..].rsplit_once(']') {
-        return colon_port.starts_with(':');
-    }
-    if let Some((host, _port)) = addr[1..].rsplit_once(':') {
-        // if host contains a ":" then is thi is probably a IPv6 address.
-        return !host.contains(':');
-    }
-    false
-}
-
-/// Attempts to parse a `socket_addr`.
-/// If no port is defined, it just accepts the address and uses the given default port.
-///
-/// This function supports
-/// - IPv4
-/// - IPv4:port
-/// - IPv6
-/// - \[IPv6\]:port -- IpV6 contains colon. It is customary to require bracket for this reason.
-/// - hostname
-/// - hostname:port
-/// with or without a port.
-///
-/// Note that this function returns a SocketAddr, so that if a hostname
-/// is given, DNS resolution will happen once and for all.
-pub fn parse_socket_addr_with_default_port(
-    addr: &str,
-    default_port: u16,
-) -> anyhow::Result<SocketAddr> {
-    if contains_port(addr) {
-        get_socket_addr(&addr)
-    } else {
-        get_socket_addr(&(addr, default_port))
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn test_parse_socket_addr_helper(addr: &str, expected_opt: Option<&str>) {
-        let socket_addr_res = parse_socket_addr_with_default_port(addr, 1337);
-        if let Some(expected) = expected_opt {
-            assert!(
-                socket_addr_res.is_ok(),
-                "Parsing `{}` was expected to succeed",
-                addr
-            );
-            let socket_addr = socket_addr_res.unwrap();
-            let expected_socket_addr: SocketAddr = expected.parse().unwrap();
-            assert_eq!(socket_addr, expected_socket_addr);
-        } else {
-            assert!(
-                socket_addr_res.is_err(),
-                "Parsing `{}` was expected to fail",
-                addr
-            );
-        }
-    }
-
     #[test]
-    fn test_parse_socket_addr_with_ips() {
-        test_parse_socket_addr_helper("127.0.0.1", Some("127.0.0.1:1337"));
-        test_parse_socket_addr_helper("127.0.0.1:100", Some("127.0.0.1:100"));
-        test_parse_socket_addr_helper("127.0..1:100", None);
-        test_parse_socket_addr_helper(
+    fn test_parse_host_addr() {
+        HostAddr::parse_with_default_port("127.0..1", 1337).unwrap_err();
+        assert_eq!(
+            HostAddr::parse_with_default_port("127.0.0.1", 1337).unwrap(),
+            "127.0.0.1:1337"
+        );
+        assert_eq!(
+            HostAddr::parse_with_default_port("127.0.0.1:100", 1337).unwrap(),
+            "127.0.0.1:100"
+        );
+        test_parse_host_addr_helper("127.0.0.1", Some("127.0.0.1:1337"));
+        test_parse_host_addr_helper("127.0.0.1:100", Some("127.0.0.1:100"));
+        test_parse_host_addr_helper("127.0..1:100", None);
+        test_parse_host_addr_helper(
             "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
             Some("[2001:0db8:85a3:0000:0000:8a2e:0370:7334]:1337"),
         );
-        test_parse_socket_addr_helper("2001:0db8:85a3:0000:0000:8a2e:0370:7334:1000", None);
-        test_parse_socket_addr_helper(
+        test_parse_host_addr_helper("2001:0db8:85a3:0000:0000:8a2e:0370:7334:1000", None);
+        test_parse_host_addr_helper(
             "[2001:0db8:85a3:0000:0000:8a2e:0370:7334]:1000",
             Some("[2001:0db8:85a3:0000:0000:8a2e:0370:7334]:1000"),
         );
-        test_parse_socket_addr_helper("[2001:0db8:1000", None);
-        test_parse_socket_addr_helper("2001:0db8:85a3:0000:0000:8a2e:0370:7334]:1000", None);
-    }
+        test_parse_host_addr_helper("[2001:0db8:1000", None);
+        test_parse_host_addr_helper("2001:0db8:85a3:0000:0000:8a2e:0370:7334]:1000", None);
 
-    // This test require DNS.
-    #[test]
-    fn test_parse_socket_addr_with_resolution() {
-        let socket_addr = parse_socket_addr_with_default_port("google.com:1000", 1337).unwrap();
-        assert_eq!(socket_addr.port(), 1000);
-        let socket_addr = parse_socket_addr_with_default_port("google.com", 1337).unwrap();
-        assert_eq!(socket_addr.port(), 1337);
+        test_parse_host_addr_helper("google.com", Some("google.com:1337"));
+        test_parse_host_addr_helper("2001:0db8:85a3:0000:0000:8a2e:0370:7334]:1000", None);
     }
 }
