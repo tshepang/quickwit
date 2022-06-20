@@ -57,7 +57,8 @@ pub fn get_http_client() -> HttpClient {
         // (Besides, HTTP2 would be awesome but rusoto does not leverage
         // multiplexing anyway.)
         .enable_http1()
-        .wrap_connector(http_connector);
+        .build();
+        // .wrap_connector(http_connector);
     HttpClient::from_connector_with_config(connector, http_config)
 }
 

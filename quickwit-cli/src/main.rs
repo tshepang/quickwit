@@ -42,7 +42,8 @@ fn setup_logging_and_tracing(level: Level) -> anyhow::Result<()> {
     let env_filter = env::var("RUST_LOG")
         .map(|_| EnvFilter::from_default_env())
         .or_else(|_| EnvFilter::try_new(format!("quickwit={}", level)))
-        .context("Failed to set up tracing env filter.")?;
+        .context("Failed to set up tracing env filter.")?
+        .add_directive("[S3_REQUEST]=trace".parse().unwrap());
     global::set_text_map_propagator(TraceContextPropagator::new());
     let registry = tracing_subscriber::registry().with(env_filter);
     let event_format = tracing_subscriber::fmt::format()

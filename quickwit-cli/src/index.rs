@@ -47,7 +47,7 @@ use quickwit_storage::{load_file, quickwit_storage_uri_resolver};
 use quickwit_telemetry::payload::TelemetryEvent;
 use tabled::{Table, Tabled};
 use thousands::Separable;
-use tracing::{debug, warn, Level};
+use tracing::{debug, warn, Level, Instrument, info_span};
 
 use crate::stats::{mean, percentile, std_deviation};
 use crate::{
@@ -266,7 +266,7 @@ pub enum IndexCliCommand {
 impl IndexCliCommand {
     pub fn default_log_level(&self) -> Level {
         match self {
-            Self::Search(_) => Level::ERROR,
+            Self::Search(_) => Level::TRACE,
             _ => Level::INFO,
         }
     }
@@ -501,7 +501,7 @@ impl IndexCliCommand {
             Self::Create(args) => create_index_cli(args).await,
             Self::Describe(args) => describe_index_cli(args).await,
             Self::Ingest(args) => ingest_docs_cli(args).await,
-            Self::Search(args) => search_index_cli(args).await,
+            Self::Search(args) => search_index_cli(args).instrument(info_span!("quickwit-search")).await,
             Self::Merge(args) => merge_or_demux_cli(args, true, false).await,
             Self::Demux(args) => merge_or_demux_cli(args, false, true).await,
             Self::GarbageCollect(args) => garbage_collect_index_cli(args).await,
