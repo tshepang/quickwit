@@ -43,7 +43,7 @@ use rusoto_s3::{
 };
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn, Instrument};
 
 use crate::object_storage::MultiPartPolicy;
 use crate::{OwnedBytes, Storage, StorageError, StorageErrorKind, StorageResult};
@@ -341,7 +341,10 @@ impl S3CompatibleObjectStorage {
             content_length: Some(len as i64),
             ..Default::default()
         };
-        self.s3_client.put_object(request).await?;
+        self.s3_client
+            .put_object(request)
+            .instrument(tracing::info_span!("S3_REQUEST"))
+            .await?;
         Ok(())
     }
 
@@ -373,6 +376,7 @@ impl S3CompatibleObjectStorage {
                 .await
                 .map_err(RusotoErrorWrapper::from)
         })
+        .instrument(tracing::info_span!("S3_REQUEST"))
         .await?
         .upload_id
         .ok_or_else(|| {
@@ -437,6 +441,7 @@ impl S3CompatibleObjectStorage {
         let upload_part_output = self
             .s3_client
             .upload_part(upload_part_req)
+            .instrument(tracing::info_span!("S3_REQUEST"))
             .await
             .map_err(RusotoErrorWrapper::from)
             .map_err(|rusoto_err| {
@@ -520,6 +525,7 @@ impl S3CompatibleObjectStorage {
         retry(&self.retry_params, || async {
             self.s3_client
                 .complete_multipart_upload(complete_upload_req.clone())
+                .instrument(tracing::info_span!("S3_REQUEST"))
                 .await
                 .map_err(RusotoErrorWrapper::from)
         })
@@ -537,6 +543,7 @@ impl S3CompatibleObjectStorage {
         retry(&self.retry_params, || async {
             self.s3_client
                 .abort_multipart_upload(abort_upload_req.clone())
+                .instrument(tracing::info_span!("S3_REQUEST"))
                 .await
                 .map_err(RusotoErrorWrapper::from)
         })
@@ -569,6 +576,7 @@ impl S3CompatibleObjectStorage {
         let get_object_output = retry(&self.retry_params, || async {
             self.s3_client
                 .get_object(get_object_req.clone())
+                .instrument(tracing::info_span!("S3_REQUEST"))
                 .await
                 .map_err(RusotoErrorWrapper::from)
         })
@@ -600,6 +608,7 @@ impl Storage for S3CompatibleObjectStorage {
                 max_keys: Some(1),
                 ..Default::default()
             })
+            .instrument(tracing::info_span!("S3_REQUEST"))
             .await?;
         Ok(())
     }
@@ -627,6 +636,7 @@ impl Storage for S3CompatibleObjectStorage {
         let get_object_output = retry(&self.retry_params, || async {
             self.s3_client
                 .get_object(get_object_req.clone())
+                .instrument(tracing::info_span!("S3_REQUEST"))
                 .await
                 .map_err(RusotoErrorWrapper::from)
         })
@@ -651,6 +661,7 @@ impl Storage for S3CompatibleObjectStorage {
         retry(&self.retry_params, || async {
             self.s3_client
                 .delete_object(delete_object_req.clone())
+                .instrument(tracing::info_span!("S3_REQUEST"))
                 .await
                 .map_err(RusotoErrorWrapper::from)
         })
@@ -688,6 +699,7 @@ impl Storage for S3CompatibleObjectStorage {
         let head_object_output_res = retry(&self.retry_params, || async {
             self.s3_client
                 .head_object(head_object_req.clone())
+                .instrument(tracing::info_span!("S3_REQUEST"))
                 .await
                 .map_err(RusotoErrorWrapper::from)
         })
