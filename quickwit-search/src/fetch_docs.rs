@@ -163,6 +163,6 @@ async fn fetch_docs_in_split(
         }
     });
 
-    let stream = futures::stream::iter(doc_futures).buffer_unordered(10);
+    let stream = futures::stream::iter(doc_futures).buffer_unordered(100);
     stream.try_collect::<Vec<_>>().await
 }
