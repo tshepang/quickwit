@@ -501,7 +501,7 @@ impl IndexCliCommand {
             Self::Create(args) => create_index_cli(args).await,
             Self::Describe(args) => describe_index_cli(args).await,
             Self::Ingest(args) => ingest_docs_cli(args).await,
-            Self::Search(args) => search_index_cli(args).instrument(info_span!("quickwit-search")).await,
+            Self::Search(args) => search_index_cli(args).instrument(info_span!("quickwit-search-no-delay")).await,
             Self::Merge(args) => merge_or_demux_cli(args, true, false).await,
             Self::Demux(args) => merge_or_demux_cli(args, false, true).await,
             Self::GarbageCollect(args) => garbage_collect_index_cli(args).await,
