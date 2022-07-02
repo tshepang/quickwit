@@ -1,4 +1,4 @@
-// Copyright (C) 2021 Quickwit, Inc.
+// Copyright (C) 2022 Quickwit, Inc.
 //
 // Quickwit is offered under the AGPL v3.0 and as commercial software.
 // For commercial licensing, contact us at hello@quickwit.io.
@@ -121,6 +121,20 @@ async fn test_cmd_create() -> Result<()> {
     assert_eq!(index_metadata.index_id, test_env.index_id);
     assert_eq!(index_metadata.index_uri, test_env.index_uri.as_ref());
 
+    // Create non existing index with --overwrite.
+    let index_id = append_random_suffix("test-create-non-existing-index-with-overwrite");
+    let test_env = create_test_env(index_id, TestStorageType::LocalFileSystem)?;
+    make_command(
+        format!(
+            "index create --index-config {} --config {} --overwrite",
+            test_env.resource_files["index_config_without_uri"].display(),
+            test_env.resource_files["config"].display(),
+        )
+        .as_str(),
+    )
+    .assert()
+    .success();
+
     // Attempt to create with ill-formed new command.
     make_command("index create")
         .assert()
@@ -236,6 +250,15 @@ fn test_cmd_ingest_simple() -> Result<()> {
     )
     .pipe_stdin(log_path)?
     .assert()
+    // Outputting process STDOUT.
+    .stdout(predicate::function(|process_stdout: &str| {
+        println!("\n\n-------\nProcess stdout:\n{process_stdout}\n\n-------------\n\n");
+        true
+    }))
+    .stderr(predicate::function(|process_stderr: &str| {
+        println!("\n\n-------\nProcess stderr:\n{process_stderr}\n\n-------------\n\n");
+        true
+    }))
     .success()
     .stdout(predicate::str::contains("Indexed"))
     .stdout(predicate::str::contains("documents in"))
@@ -444,7 +467,7 @@ fn test_cmd_delete_index_dry_run() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_cmd_delete() -> Result<()> {
+async fn test_cmd_delete_simple() -> Result<()> {
     let index_id = append_random_suffix("test-delete-cmd");
     let test_env = create_test_env(index_id, TestStorageType::LocalFileSystem)?;
     create_logs_index(&test_env);

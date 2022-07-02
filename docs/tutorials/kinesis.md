@@ -83,27 +83,6 @@ wget -O gh-archive.yaml https://raw.githubusercontent.com/quickwit-oss/quickwit/
 ./quickwit index create --index-config gh-archive.yaml
 ```
 
-## Create Kinesis source
-
-```yaml title="kinesis-source.yaml"
-#
-# Kinesis source config file.
-#
-source_id: kinesis-source
-source_type: kinesis
-params:
-  stream_name: gh-archive
-```
-
-Run these commands to download the source config file and create the source.
-
-```bash
-# Download Kinesis soure config.
-wget https://raw.githubusercontent.com/quickwit-oss/quickwit/main/config/tutorials/gh-archive/kinesis-source.yaml
-
-# Create source.
-./quickwit source create --index gh-archive --source-config kinesis-source.yaml
-```
 
 ## Create and populate Kinesis stream
 
@@ -125,8 +104,44 @@ gunzip -c 2022-05-12*.json.gz | \
 jq -c '.created_at = (.created_at | fromdate) | .public = if .public then 1 else 0 end' | \
 parallel --gnu -j8 -N 500 --pipe \
 'jq --slurp -c "{\"Records\": [.[] | {\"Data\": (. | tostring), \"PartitionKey\": .id }], \"StreamName\": \"gh-archive\"}" > records-{%}.json && \
-aws kinesis put-records --cli-input-json file://records-{%}.json >> out.log'
+aws kinesis put-records --cli-input-json file://records-{%}.json --cli-binary-format raw-in-base64-out >> out.log'
 ```
+
+## Create Kinesis source
+
+```yaml title="kinesis-source.yaml"
+#
+# Kinesis source config file.
+#
+source_id: kinesis-source
+source_type: kinesis
+params:
+  stream_name: gh-archive
+```
+
+Run these commands to download the source config file and create the source.
+
+```bash
+# Download Kinesis source config.
+wget https://raw.githubusercontent.com/quickwit-oss/quickwit/main/config/tutorials/gh-archive/kinesis-source.yaml
+
+# Create source.
+./quickwit source create --index gh-archive --source-config kinesis-source.yaml
+```
+
+:::note
+
+If this command fails with the following error message:
+```
+Command failed: Stream gh-archive under account XXXXXXXXX not found.
+
+Caused by:
+    0: Stream gh-archive under account XXXXXXXX not found.
+    1: Stream gh-archive under account XXXXXXXX not found.
+```
+
+it means the Kinesis stream was not properly created in the previous step.
+:::
 
 ## Launch indexing and search services
 
@@ -151,6 +166,8 @@ Once the first split is published, you can start running search queries. For ins
 ```bash
 curl 'http://localhost:7280/api/v1/gh-archive/search?query=org.login:kubernetes%20AND%20repo.name:kubernetes'
 ```
+
+It is also possible to access these results through the [Quickwit UI](http://localhost:7280/ui/search?query=org.login%3Akubernetes+AND+repo.name%3Akubernetes&index_id=gh-archive&max_hits=10).
 
 We can also group these events by type and count them:
 

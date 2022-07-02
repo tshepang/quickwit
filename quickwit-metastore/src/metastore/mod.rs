@@ -1,4 +1,4 @@
-// Copyright (C) 2021 Quickwit, Inc.
+// Copyright (C) 2022 Quickwit, Inc.
 //
 // Quickwit is offered under the AGPL v3.0 and as commercial software.
 // For commercial licensing, contact us at hello@quickwit.io.
@@ -21,6 +21,8 @@ pub mod file_backed_metastore;
 mod index_metadata;
 #[cfg(feature = "postgres")]
 pub mod postgresql_metastore;
+#[cfg(feature = "postgres")]
+mod postgresql_model;
 
 use std::ops::Range;
 

@@ -1,4 +1,4 @@
-// Copyright (C) 2021 Quickwit, Inc.
+// Copyright (C) 2022 Quickwit, Inc.
 //
 // Quickwit is offered under the AGPL v3.0 and as commercial software.
 // For commercial licensing, contact us at hello@quickwit.io.
@@ -30,12 +30,12 @@ use crate::cluster_api::GrpcClusterAdapter;
 use crate::search_api::GrpcSearchAdapter;
 use crate::QuickwitServices;
 
-/// Start gRPC service given a gRPC address and a search service and cluster service.
+/// Starts gRPC service given a gRPC address and a search service and cluster service.
 pub(crate) async fn start_grpc_server(
-    grpc_addr: SocketAddr,
+    grpc_listen_addr: SocketAddr,
     quickwit_services: &QuickwitServices,
 ) -> anyhow::Result<()> {
-    info!(grpc_addr=?grpc_addr, "Start gRPC service.");
+    info!(grpc_listen_addr = ?grpc_listen_addr, "Starting gRPC server.");
 
     let mut server = Server::builder();
 
@@ -52,6 +52,6 @@ pub(crate) async fn start_grpc_server(
         server_router = server_router.add_service(SearchServiceServer::new(grpc_search_service));
     }
 
-    server_router.serve(grpc_addr).await?;
+    server_router.serve(grpc_listen_addr).await?;
     Ok(())
 }

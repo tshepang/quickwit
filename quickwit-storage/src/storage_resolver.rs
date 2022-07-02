@@ -1,4 +1,4 @@
-// Copyright (C) 2021 Quickwit, Inc.
+// Copyright (C) 2022 Quickwit, Inc.
 //
 // Quickwit is offered under the AGPL v3.0 and as commercial software.
 // For commercial licensing, contact us at hello@quickwit.io.
@@ -113,7 +113,7 @@ impl StorageUriResolver {
                 kind: storage_error.kind(),
                 message: storage_error
                     .source()
-                    .map(|err| format!("{}", err))
+                    .map(|err| format!("{err:?}"))
                     .unwrap_or_else(String::new),
             }
         })?;

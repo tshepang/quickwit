@@ -1,4 +1,4 @@
-// Copyright (C) 2021 Quickwit, Inc.
+// Copyright (C) 2022 Quickwit, Inc.
 //
 // Quickwit is offered under the AGPL v3.0 and as commercial software.
 // For commercial licensing, contact us at hello@quickwit.io.
@@ -281,7 +281,7 @@ pub async fn root_search(
         let res: IntermediateAggregationResults =
             serde_json::from_str(&intermediate_aggregation_result)?;
         let req: Aggregations = serde_json::from_str(search_request.aggregation_request())?;
-        let res: AggregationResults = AggregationResults::from_intermediate_and_req(res, req)?;
+        let res: AggregationResults = res.into_final_bucket_result(req)?;
         Some(serde_json::to_string(&res)?)
     } else {
         None

@@ -1,4 +1,4 @@
-// Copyright (C) 2021 Quickwit, Inc.
+// Copyright (C) 2022 Quickwit, Inc.
 //
 // Quickwit is offered under the AGPL v3.0 and as commercial software.
 // For commercial licensing, contact us at hello@quickwit.io.
@@ -282,6 +282,29 @@ impl<A: Actor> Inbox<A> {
             .map(|command_or_message| match command_or_message {
                 CommandOrMessage::Message(mut msg) => msg.message(),
                 CommandOrMessage::Command(cmd) => Box::new(cmd),
+            })
+            .collect()
+    }
+
+    /// Destroys the inbox and returns the list of pending messages or commands
+    /// in the low priority channel.
+    ///
+    /// Warning this iterator might never be exhausted if there is a living
+    /// mailbox associated to it.
+    pub fn drain_for_test_typed<M: 'static>(&self) -> Vec<M> {
+        self.rx
+            .drain_low_priority()
+            .into_iter()
+            .flat_map(|command_or_message| match command_or_message {
+                CommandOrMessage::Message(mut msg) => Some(msg.message()),
+                CommandOrMessage::Command(_) => None,
+            })
+            .flat_map(|any_msg| {
+                if let Ok(boxed_m) = any_msg.downcast::<M>() {
+                    Some(*boxed_m)
+                } else {
+                    None
+                }
             })
             .collect()
     }

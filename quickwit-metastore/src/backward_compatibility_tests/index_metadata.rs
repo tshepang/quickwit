@@ -1,4 +1,4 @@
-// Copyright (C) 2021 Quickwit, Inc.
+// Copyright (C) 2022 Quickwit, Inc.
 //
 // Quickwit is offered under the AGPL v3.0 and as commercial software.
 // For commercial licensing, contact us at hello@quickwit.io.
@@ -162,6 +162,8 @@ pub(crate) fn sample_index_metadata_for_regression() -> IndexMetadata {
         merge_enabled: true,
         merge_policy,
         resources: indexing_resources,
+        docstore_blocksize: IndexingSettings::default_docstore_blocksize(),
+        docstore_compression_level: IndexingSettings::default_docstore_compression_level(),
     };
     let search_settings = SearchSettings {
         default_search_fields: vec!["message".to_string()],

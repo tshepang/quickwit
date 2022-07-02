@@ -1,4 +1,4 @@
-// Copyright (C) 2021 Quickwit, Inc.
+// Copyright (C) 2022 Quickwit, Inc.
 //
 // Quickwit is offered under the AGPL v3.0 and as commercial software.
 // For commercial licensing, contact us at hello@quickwit.io.
@@ -25,6 +25,7 @@ mod indexing_service;
 mod ingest_api_garbage_collector;
 mod packager;
 mod publisher;
+mod sequencer;
 mod uploader;
 
 pub use indexing_pipeline::{IndexingPipeline, IndexingPipelineHandler, IndexingPipelineParams};

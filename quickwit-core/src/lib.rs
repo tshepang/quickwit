@@ -1,4 +1,4 @@
-// Copyright (C) 2021 Quickwit, Inc.
+// Copyright (C) 2022 Quickwit, Inc.
 //
 // Quickwit is offered under the AGPL v3.0 and as commercial software.
 // For commercial licensing, contact us at hello@quickwit.io.
@@ -120,7 +120,7 @@ mod tests {
             storage_resolver,
             Uri::new("ram://test-storage-indexes".to_string()),
         );
-        let index_metadata = index_service.create_index(index_config).await?;
+        let index_metadata = index_service.create_index(index_config, false).await?;
         assert_eq!(index_metadata.index_id, index_id);
         assert_eq!(
             index_metadata.index_uri,

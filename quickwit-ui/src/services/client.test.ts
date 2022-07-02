@@ -1,4 +1,4 @@
-// Copyright (C) 2021 Quickwit, Inc.
+// Copyright (C) 2022 Quickwit, Inc.
 //
 // Quickwit is offered under the AGPL v3.0 and as commercial software.
 // For commercial licensing, contact us at hello@quickwit.io.
@@ -17,7 +17,22 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-#[allow(missing_docs)]
-pub mod model;
-#[allow(missing_docs)]
-pub mod schema;
+import { SearchRequest } from '../utils/models';
+import { Client } from './client';
+
+describe('Client unit test', () => {
+    it('Should build search URL', () => {
+        const searchRequest: SearchRequest = {
+          indexId: 'my-new-fresh-index-id',
+          query: 'severity_error:ERROR',
+          startTimestamp: 100,
+          endTimestamp: 200,
+          maxHits: 20,
+          sortByField: {
+            field_name: 'timestamp',
+            order: 'Asc'
+          }
+        };
+        expect(new Client().buildSearchUrl(searchRequest).toString()).toBe("http://localhost/api/v1/my-new-fresh-index-id/search?query=severity_error%3AERROR&max_hits=20&start_timestamp=100&end_timestamp=200&sort_by_field=%2Btimestamp");
+    });
+});

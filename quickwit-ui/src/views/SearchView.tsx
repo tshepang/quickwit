@@ -1,4 +1,4 @@
-// Copyright (C) 2021 Quickwit, Inc.
+// Copyright (C) 2022 Quickwit, Inc.
 //
 // Quickwit is offered under the AGPL v3.0 and as commercial software.
 // For commercial licensing, contact us at hello@quickwit.io.
@@ -44,6 +44,15 @@ function SearchView() {
 
   const runSearch = (updatedSearchRequest: SearchRequest) => {
     console.log('Run search...', updatedSearchRequest);
+    // If we have a timstamp field, order by desc on the timestamp field.
+    if (index?.metadata.indexing_settings.timestamp_field) {
+      updatedSearchRequest.sortByField = {
+        field_name: index?.metadata.indexing_settings.timestamp_field,
+        order: 'Desc'
+      };
+    } else {
+      updatedSearchRequest.sortByField = null;
+    }
     if (updatedSearchRequest !== null) {
       setSearchRequest(updatedSearchRequest);
     }
@@ -62,7 +71,7 @@ function SearchView() {
   }
   const onIndexMetadataUpdate = (indexMetadata: IndexMetadata | null) => {
     setSearchRequest(previousRequest => {
-      return {...previousRequest, indexId: indexMetadata === null ? null : indexMetadata.index_id}; 
+      return {...previousRequest, indexId: indexMetadata === null ? null : indexMetadata.index_id};
     });
   }
   const onSearchRequestUpdate = (searchRequest: SearchRequest) => {
@@ -71,6 +80,10 @@ function SearchView() {
   useEffect(() => {
     if (prevIndexIdRef.current !== index?.metadata.index_id) {
       setSearchResponse(null);
+    }
+    // Run search only if this is the first time we set the index.
+    if (prevIndexIdRef.current === null) {
+      runSearch(searchRequest);
     }
     prevIndexIdRef.current = index === null ? null : index.metadata.index_id;
   }, [index]);
@@ -91,13 +104,6 @@ function SearchView() {
       setIndex(fetchedIndex);
     });
   }, [searchRequest, quickwitClient, index]);
-
-  useEffect(() => {
-    if (searchRequest.indexId === null || searchRequest.indexId === undefined || searchRequest.indexId === '') {
-      return;
-    }
-    runSearch(searchRequest);
-  }, []); // <-- empty array means 'run once'
 
   const searchParams = toUrlSearchRequestParams(searchRequest);
   // `toUrlSearchRequestParams` is used for the UI urls. We need to remove the `indexId` request parameter to generate

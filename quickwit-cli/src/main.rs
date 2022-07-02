@@ -1,4 +1,4 @@
-// Copyright (C) 2021 Quickwit, Inc.
+// Copyright (C) 2022 Quickwit, Inc.
 //
 // Quickwit is offered under the AGPL v3.0 and as commercial software.
 // For commercial licensing, contact us at hello@quickwit.io.
@@ -25,6 +25,7 @@ use opentelemetry::sdk::propagation::TraceContextPropagator;
 use quickwit_cli::cli::{build_cli, CliCommand};
 use quickwit_cli::QW_JAEGER_ENABLED_ENV_KEY;
 use quickwit_telemetry::payload::TelemetryEvent;
+use tikv_jemallocator::Jemalloc;
 use tracing::instrument::WithSubscriber;
 use tracing::{info, Level};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -33,9 +34,12 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 fn setup_logging_and_tracing(level: Level) -> anyhow::Result<WorkerGuard> {
-    let file_appender = tracing_appender::rolling::never("./demo/", "traces.json");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    let file_appender = tracing_appender::rolling::never("./demo/", "traces.json");
     #[cfg(feature = "tokio-console")]
     {
         use quickwit_cli::QW_TOKIO_CONSOLE_ENABLED_ENV_KEY;
