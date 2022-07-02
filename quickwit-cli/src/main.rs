@@ -25,28 +25,35 @@ use opentelemetry::sdk::propagation::TraceContextPropagator;
 use quickwit_cli::cli::{build_cli, CliCommand};
 use quickwit_cli::QW_JAEGER_ENABLED_ENV_KEY;
 use quickwit_telemetry::payload::TelemetryEvent;
+use tracing::instrument::WithSubscriber;
 use tracing::{info, Level};
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::fmt::time::UtcTime;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
 
-fn setup_logging_and_tracing(level: Level) -> anyhow::Result<()> {
+fn setup_logging_and_tracing(level: Level) -> anyhow::Result<WorkerGuard> {
+    let file_appender = tracing_appender::rolling::never("./demo/", "traces.json");
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
     #[cfg(feature = "tokio-console")]
     {
         use quickwit_cli::QW_TOKIO_CONSOLE_ENABLED_ENV_KEY;
         if std::env::var_os(QW_TOKIO_CONSOLE_ENABLED_ENV_KEY).is_some() {
             console_subscriber::init();
-            return Ok(());
+            return Ok(guard);
         }
     }
     let env_filter = env::var("RUST_LOG")
         .map(|_| EnvFilter::from_default_env())
-        .or_else(|_| EnvFilter::try_new(format!("quickwit={}", level)))
-        .context("Failed to set up tracing env filter.")?
-        .add_directive("[S3_REQUEST]=trace".parse().unwrap());
+        // .or_else(|_| EnvFilter::try_new(format!("quickwit={}", level)))
+        .or_else(|_| EnvFilter::try_new(format!("FETCH_DOCS_IN_SPLIT,S3_GET_REQUEST")))
+        .context("Failed to set up tracing env filter.")?;
     global::set_text_map_propagator(TraceContextPropagator::new());
     let registry = tracing_subscriber::registry().with(env_filter);
     let event_format = tracing_subscriber::fmt::format()
+        .json()
+        .flatten_event(true)
         .with_target(true)
         .with_timer(
             // We do not rely on the Rfc3339 implementation, because it has a nanosecond precision.
@@ -66,17 +73,19 @@ fn setup_logging_and_tracing(level: Level) -> anyhow::Result<()> {
             .install_simple()
             .context("Failed to initialize Jaeger exporter.")?;
         registry
+            .with(tracing_subscriber::fmt::layer().event_format(event_format.clone()).with_writer(non_blocking))
             .with(tracing_subscriber::fmt::layer().event_format(event_format))
             .with(tracing_opentelemetry::layer().with_tracer(tracer))
             .try_init()
             .context("Failed to set up tracing.")?
     } else {
         registry
+            .with(tracing_subscriber::fmt::layer().event_format(event_format.clone()).with_writer(non_blocking))
             .with(tracing_subscriber::fmt::layer().event_format(event_format))
             .try_init()
             .context("Failed to set up tracing.")?
     }
-    Ok(())
+    Ok(guard)
 }
 
 #[tokio::main]
@@ -113,7 +122,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    setup_logging_and_tracing(command.default_log_level())?;
+    let _guard = setup_logging_and_tracing(command.default_log_level())?;
     info!(
         version = env!("CARGO_PKG_VERSION"),
         commit = env!("QW_COMMIT_SHORT_HASH"),

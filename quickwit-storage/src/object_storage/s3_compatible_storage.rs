@@ -43,6 +43,7 @@ use rusoto_s3::{
 };
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::time::Instant;
 use tracing::{debug, error, info, instrument, warn, Instrument};
 
 use crate::object_storage::MultiPartPolicy;
@@ -341,10 +342,12 @@ impl S3CompatibleObjectStorage {
             content_length: Some(len as i64),
             ..Default::default()
         };
+        let time = Instant::now();
         self.s3_client
             .put_object(request)
-            .instrument(tracing::info_span!("S3_REQUEST"))
             .await?;
+        let elapsed = time.elapsed().as_millis();
+        info!(target: "S3_PUT_REQUEST", time_elapsed = %elapsed, "PUT took {}ms", elapsed);
         Ok(())
     }
 
@@ -370,18 +373,20 @@ impl S3CompatibleObjectStorage {
             key: key.to_string(),
             ..Default::default()
         };
+        let time = Instant::now();
         let upload_id = retry(&self.retry_params, || async {
             self.s3_client
                 .create_multipart_upload(create_upload_req.clone())
                 .await
                 .map_err(RusotoErrorWrapper::from)
         })
-        .instrument(tracing::info_span!("S3_REQUEST"))
         .await?
         .upload_id
         .ok_or_else(|| {
             RusotoError::ParseError("The returned multipart upload id was null.".to_string())
         })?;
+        let elapsed = time.elapsed().as_millis();
+        info!(target: "S3_CREATE_MULTIPART_PUT_REQUEST", time_elapsed = %elapsed, "CREATE_MULTIPART_PUT took {}ms", elapsed);
         Ok(MultipartUploadId(upload_id))
     }
 
@@ -438,10 +443,10 @@ impl S3CompatibleObjectStorage {
             upload_id: upload_id.0,
             ..Default::default()
         };
+        let time = Instant::now();
         let upload_part_output = self
             .s3_client
             .upload_part(upload_part_req)
-            .instrument(tracing::info_span!("S3_REQUEST"))
             .await
             .map_err(RusotoErrorWrapper::from)
             .map_err(|rusoto_err| {
@@ -451,6 +456,8 @@ impl S3CompatibleObjectStorage {
                     Retry::Permanent(StorageError::from(rusoto_err))
                 }
             })?;
+        let elapsed = time.elapsed().as_millis();
+        info!(target: "S3_UPLOAD_PART_REQUEST", time_elapsed = %elapsed, "UPLOAD_PART took {}ms", elapsed);
         Ok(CompletedPart {
             e_tag: upload_part_output.e_tag,
             part_number: Some(part.part_number as i64),
@@ -522,14 +529,16 @@ impl S3CompatibleObjectStorage {
             upload_id: upload_id.to_string(),
             ..Default::default()
         };
+        let time = Instant::now();
         retry(&self.retry_params, || async {
             self.s3_client
                 .complete_multipart_upload(complete_upload_req.clone())
-                .instrument(tracing::info_span!("S3_REQUEST"))
                 .await
                 .map_err(RusotoErrorWrapper::from)
         })
         .await?;
+        let elapsed = time.elapsed().as_millis();
+        info!(target: "S3_COMPLETE_MULTIPART_PUT_REQUEST", time_elapsed = %elapsed, "COMPLETE_MULTIPART_PUT took {}ms", elapsed);
         Ok(())
     }
 
@@ -540,14 +549,16 @@ impl S3CompatibleObjectStorage {
             upload_id: upload_id.to_string(),
             ..Default::default()
         };
+        let time = Instant::now();
         retry(&self.retry_params, || async {
             self.s3_client
                 .abort_multipart_upload(abort_upload_req.clone())
-                .instrument(tracing::info_span!("S3_REQUEST"))
                 .await
                 .map_err(RusotoErrorWrapper::from)
         })
         .await?;
+        let elapsed = time.elapsed().as_millis();
+        info!(target: "S3_ABORT_MULTIPART_REQUEST", time_elapsed = %elapsed, "ABORT_MULTIPART took {}ms", elapsed);
         Ok(())
     }
 
@@ -573,14 +584,16 @@ impl S3CompatibleObjectStorage {
     ) -> StorageResult<Vec<u8>> {
         let cap = range_opt.as_ref().map(Range::len).unwrap_or(0);
         let get_object_req = self.create_get_object_request(path, range_opt);
+        let time = Instant::now();
         let get_object_output = retry(&self.retry_params, || async {
             self.s3_client
                 .get_object(get_object_req.clone())
-                .instrument(tracing::info_span!("S3_REQUEST"))
                 .await
                 .map_err(RusotoErrorWrapper::from)
         })
         .await?;
+        let elapsed = time.elapsed().as_millis();
+        info!(target: "S3_GET_REQUEST", time_elapsed = %elapsed, "GET took {}ms", elapsed);
         let mut body = get_object_output.body.ok_or_else(|| {
             StorageErrorKind::Service.with_error(anyhow::anyhow!("Returned object body was empty."))
         })?;

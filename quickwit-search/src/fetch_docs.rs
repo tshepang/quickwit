@@ -26,7 +26,8 @@ use itertools::Itertools;
 use quickwit_proto::{FetchDocsResponse, PartialHit, SplitIdAndFooterOffsets};
 use quickwit_storage::Storage;
 use tantivy::{IndexReader, ReloadPolicy};
-use tracing::error;
+use tokio::time::Instant;
+use tracing::{error, info, info_span, Instrument};
 
 use crate::leaf::open_index;
 use crate::GlobalDocAddress;
@@ -163,6 +164,14 @@ async fn fetch_docs_in_split(
         }
     });
 
-    let stream = futures::stream::iter(doc_futures).buffer_unordered(100);
-    stream.try_collect::<Vec<_>>().await
+    async {
+        let time = Instant::now();
+        let stream = futures::stream::iter(doc_futures).buffer_unordered(100);
+        let res = stream.try_collect::<Vec<_>>().await;
+        let elapsed = time.elapsed().as_millis();
+        info!(target: "FETCH_DOCS_IN_SPLIT", time_elapsed = %elapsed, "FETCH took {}ms", elapsed);
+        res
+    }
+    .instrument(info_span!("FETCH_DOCS_IN_SPLIT"))
+    .await
 }
