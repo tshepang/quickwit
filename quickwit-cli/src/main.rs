@@ -26,7 +26,6 @@ use quickwit_cli::cli::{build_cli, CliCommand};
 use quickwit_cli::QW_JAEGER_ENABLED_ENV_KEY;
 use quickwit_telemetry::payload::TelemetryEvent;
 use tikv_jemallocator::Jemalloc;
-use tracing::instrument::WithSubscriber;
 use tracing::{info, Level};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::fmt::time::UtcTime;
@@ -38,8 +37,8 @@ use tracing_subscriber::layer::SubscriberExt;
 static GLOBAL: Jemalloc = Jemalloc;
 
 fn setup_logging_and_tracing(level: Level) -> anyhow::Result<WorkerGuard> {
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
     let file_appender = tracing_appender::rolling::never("./demo/", "traces.json");
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
     #[cfg(feature = "tokio-console")]
     {
         use quickwit_cli::QW_TOKIO_CONSOLE_ENABLED_ENV_KEY;
