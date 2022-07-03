@@ -26,6 +26,7 @@ use quickwit_cli::cli::{build_cli, CliCommand};
 use quickwit_cli::QW_JAEGER_ENABLED_ENV_KEY;
 use quickwit_telemetry::payload::TelemetryEvent;
 use tikv_jemallocator::Jemalloc;
+use tokio::time::Instant;
 use tracing::{info, Level};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::fmt::time::UtcTime;
@@ -50,7 +51,7 @@ fn setup_logging_and_tracing(level: Level) -> anyhow::Result<WorkerGuard> {
     let env_filter = env::var("RUST_LOG")
         .map(|_| EnvFilter::from_default_env())
         // .or_else(|_| EnvFilter::try_new(format!("quickwit={}", level)))
-        .or_else(|_| EnvFilter::try_new(format!("FETCH_DOCS_IN_SPLIT,S3_GET_REQUEST")))
+        .or_else(|_| EnvFilter::try_new(format!("FETCH_DOCS_IN_SPLIT,S3_GET_REQUEST,QUERY")))
         .context("Failed to set up tracing env filter.")?;
     global::set_text_map_propagator(TraceContextPropagator::new());
     let registry = tracing_subscriber::registry().with(env_filter);
@@ -131,12 +132,15 @@ async fn main() -> anyhow::Result<()> {
         commit = env!("QW_COMMIT_SHORT_HASH"),
     );
 
+    let time = Instant::now();
     let return_code: i32 = if let Err(err) = command.execute().await {
         eprintln!("Command failed: {:?}", err);
         1
     } else {
         0
     };
+    let elapsed = time.elapsed().as_millis();
+    info!(target: "QUERY", time_elapsed = elapsed, "QUERY took {}ms", elapsed);
 
     quickwit_telemetry::send_telemetry_event(TelemetryEvent::EndCommand { return_code }).await;
 
