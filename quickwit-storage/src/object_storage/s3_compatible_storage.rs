@@ -347,7 +347,7 @@ impl S3CompatibleObjectStorage {
             .put_object(request)
             .await?;
         let elapsed = time.elapsed().as_millis();
-        info!(target: "S3_PUT_REQUEST", time_elapsed = %elapsed, "PUT took {}ms", elapsed);
+        info!(target: "S3_PUT_REQUEST", time_elapsed = elapsed, "PUT took {}ms", elapsed);
         Ok(())
     }
 
@@ -386,7 +386,7 @@ impl S3CompatibleObjectStorage {
             RusotoError::ParseError("The returned multipart upload id was null.".to_string())
         })?;
         let elapsed = time.elapsed().as_millis();
-        info!(target: "S3_CREATE_MULTIPART_PUT_REQUEST", time_elapsed = %elapsed, "CREATE_MULTIPART_PUT took {}ms", elapsed);
+        info!(target: "S3_CREATE_MULTIPART_PUT_REQUEST", time_elapsed = elapsed, "CREATE_MULTIPART_PUT took {}ms", elapsed);
         Ok(MultipartUploadId(upload_id))
     }
 
@@ -457,7 +457,7 @@ impl S3CompatibleObjectStorage {
                 }
             })?;
         let elapsed = time.elapsed().as_millis();
-        info!(target: "S3_UPLOAD_PART_REQUEST", time_elapsed = %elapsed, "UPLOAD_PART took {}ms", elapsed);
+        info!(target: "S3_UPLOAD_PART_REQUEST", time_elapsed = elapsed, "UPLOAD_PART took {}ms", elapsed);
         Ok(CompletedPart {
             e_tag: upload_part_output.e_tag,
             part_number: Some(part.part_number as i64),
@@ -538,7 +538,7 @@ impl S3CompatibleObjectStorage {
         })
         .await?;
         let elapsed = time.elapsed().as_millis();
-        info!(target: "S3_COMPLETE_MULTIPART_PUT_REQUEST", time_elapsed = %elapsed, "COMPLETE_MULTIPART_PUT took {}ms", elapsed);
+        info!(target: "S3_COMPLETE_MULTIPART_PUT_REQUEST", time_elapsed = elapsed, "COMPLETE_MULTIPART_PUT took {}ms", elapsed);
         Ok(())
     }
 
@@ -558,7 +558,7 @@ impl S3CompatibleObjectStorage {
         })
         .await?;
         let elapsed = time.elapsed().as_millis();
-        info!(target: "S3_ABORT_MULTIPART_REQUEST", time_elapsed = %elapsed, "ABORT_MULTIPART took {}ms", elapsed);
+        info!(target: "S3_ABORT_MULTIPART_REQUEST", time_elapsed = elapsed, "ABORT_MULTIPART took {}ms", elapsed);
         Ok(())
     }
 
@@ -593,7 +593,7 @@ impl S3CompatibleObjectStorage {
         })
         .await?;
         let elapsed = time.elapsed().as_millis();
-        info!(target: "S3_GET_REQUEST", time_elapsed = %elapsed, "GET took {}ms", elapsed);
+        info!(target: "S3_GET_REQUEST", time_elapsed = elapsed, "GET took {}ms", elapsed);
         let mut body = get_object_output.body.ok_or_else(|| {
             StorageErrorKind::Service.with_error(anyhow::anyhow!("Returned object body was empty."))
         })?;

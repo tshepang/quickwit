@@ -169,7 +169,7 @@ async fn fetch_docs_in_split(
         let stream = futures::stream::iter(doc_futures).buffer_unordered(100);
         let res = stream.try_collect::<Vec<_>>().await;
         let elapsed = time.elapsed().as_millis();
-        info!(target: "FETCH_DOCS_IN_SPLIT", time_elapsed = %elapsed, "FETCH took {}ms", elapsed);
+        info!(target: "FETCH_DOCS_IN_SPLIT", time_elapsed = elapsed, "FETCH took {}ms", elapsed);
         res
     }
     .instrument(info_span!("FETCH_DOCS_IN_SPLIT"))
