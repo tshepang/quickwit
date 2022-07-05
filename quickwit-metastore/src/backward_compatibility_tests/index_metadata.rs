@@ -19,7 +19,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use byte_unit::Byte;
+use quickwit_common::Byte;
 use quickwit_config::{
     DocMapping, IndexingResources, IndexingSettings, KafkaSourceParams, MergePolicy,
     SearchSettings, SourceConfig, SourceParams,

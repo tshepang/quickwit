@@ -69,7 +69,7 @@ pub use self::storage_resolver::{
 };
 #[cfg(feature = "testsuite")]
 pub use self::test_suite::storage_test_suite;
-pub use crate::cache::{wrap_storage_with_long_term_cache, Cache, MemorySizedCache, SliceCache};
+pub use crate::cache::{wrap_storage_with_long_term_cache, Cache, SliceCache};
 pub use crate::error::{StorageError, StorageErrorKind, StorageResolverError, StorageResult};
 
 /// Loads an entire local or remote file into memory.

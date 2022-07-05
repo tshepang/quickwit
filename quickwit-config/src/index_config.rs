@@ -22,9 +22,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use byte_unit::Byte;
 use json_comments::StripComments;
 use quickwit_common::uri::{Extension, Uri};
+use quickwit_common::Byte;
 use quickwit_doc_mapper::{
     DefaultDocMapperBuilder, DocMapper, FieldMappingEntry, ModeType, QuickwitJsonOptions, SortBy,
     SortByConfig, SortOrder,

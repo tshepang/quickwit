@@ -20,9 +20,9 @@
 use std::hash::Hash;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
-use super::memory_sized_cache::MemorySizedCache;
+use quickwit_common::Byte;
+
 use crate::OwnedBytes;
 
 #[derive(Hash, Debug, Clone, PartialEq, Eq)]
@@ -33,24 +33,30 @@ struct SliceAddress {
 
 /// A simple in-resident memory slice cache.
 pub struct SliceCache {
-    inner: Mutex<MemorySizedCache<SliceAddress>>,
+    cache: moka::sync::Cache<SliceAddress, OwnedBytes>,
 }
 
 impl SliceCache {
     /// Creates an slice cache with the given capacity.
-    pub fn with_capacity_in_bytes(capacity_in_bytes: usize) -> Self {
-        SliceCache {
-            inner: Mutex::new(MemorySizedCache::<SliceAddress>::with_capacity_in_bytes(
-                capacity_in_bytes,
-            )),
-        }
+    pub fn with_capacity(capacity: Byte) -> Self {
+        let cache = moka::sync::Cache::builder()
+            .max_capacity(capacity.get_bytes())
+            .weigher(|_key, payload: &OwnedBytes| payload.len() as u32)
+            .build();
+        SliceCache { cache }
     }
 
     /// Creates a slice cache that nevers removes any entry.
     pub fn with_infinite_capacity() -> Self {
-        SliceCache {
-            inner: Mutex::new(MemorySizedCache::with_infinite_capacity()),
-        }
+        let cache = moka::sync::Cache::builder()
+            .weigher(|_key, payload: &OwnedBytes| payload.len() as u32)
+            .build();
+        SliceCache { cache }
+    }
+
+    pub fn sync(&self) -> Byte {
+        self.cache.sync();
+        Byte::from_bytes(self.cache.weighted_size())
     }
 
     /// If available, returns the cached view of the slice.
@@ -59,7 +65,7 @@ impl SliceCache {
             path: path.to_path_buf(),
             byte_range: bytes_range,
         };
-        self.inner.lock().unwrap().get(&slice_addr)
+        self.cache.get(&slice_addr)
     }
 
     /// Attempt to put the given amount of data in the cache.
@@ -67,7 +73,7 @@ impl SliceCache {
     /// capacity.
     pub fn put(&self, path: PathBuf, byte_range: Range<usize>, bytes: OwnedBytes) {
         let slice_addr = SliceAddress { path, byte_range };
-        self.inner.lock().unwrap().put(slice_addr, bytes);
+        self.cache.insert(slice_addr, bytes);
     }
 }
 
@@ -78,7 +84,7 @@ mod tests {
 
     #[test]
     fn test_cache_edge_condition() {
-        let cache = SliceCache::with_capacity_in_bytes(5);
+        let cache = SliceCache::with_capacity(Byte::from_bytes(5));
         {
             let data = OwnedBytes::new(&b"abc"[..]);
             cache.put(PathBuf::from("3"), 0..3, data);
@@ -91,11 +97,15 @@ mod tests {
             assert_eq!(cache.get(Path::new("3"), 0..3).unwrap(), &b"abc"[..]);
             assert_eq!(cache.get(Path::new("2"), 0..2).unwrap(), &b"de"[..]);
         }
+        assert_eq!(cache.size_in_cache().get_bytes(), 5);
+
         {
             let data = OwnedBytes::new(&b"fghij"[..]);
             cache.put(PathBuf::from("5"), 0..5, data);
             assert_eq!(cache.get(Path::new("5"), 0..5).unwrap(), &b"fghij"[..]);
             // our two first entries should have be removed from the cache
+            assert_eq!(cache.size_in_cache().get_bytes(), 5);
+
             assert!(cache.get(Path::new("2"), 0..2).is_none());
             assert!(cache.get(Path::new("3"), 0..3).is_none());
         }
@@ -127,7 +137,7 @@ mod tests {
 
     #[test]
     fn test_cache() {
-        let cache = SliceCache::with_capacity_in_bytes(10_000);
+        let cache = SliceCache::with_capacity(Byte::from_bytes(10_000));
         assert!(cache.get(Path::new("hello.seg"), 1..3).is_none());
         let data = OwnedBytes::new(&b"werwer"[..]);
         cache.put(PathBuf::from("hello.seg"), 1..3, data);
@@ -139,7 +149,7 @@ mod tests {
 
     #[test]
     fn test_cache_different_slice() {
-        let cache = SliceCache::with_capacity_in_bytes(10_000);
+        let cache = SliceCache::with_capacity(Byte::from_bytes(10_000));
         assert!(cache.get(Path::new("hello.seg"), 1..3).is_none());
         let data = OwnedBytes::new(&b"werwer"[..]);
         // We could actually have a cache hit here, but this is not useful for Quickwit.

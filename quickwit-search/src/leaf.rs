@@ -33,9 +33,7 @@ use quickwit_doc_mapper::{DocMapper, QUICKWIT_TOKENIZER_MANAGER};
 use quickwit_proto::{
     LeafSearchResponse, SearchRequest, SplitIdAndFooterOffsets, SplitSearchError,
 };
-use quickwit_storage::{
-    wrap_storage_with_long_term_cache, BundleStorage, MemorySizedCache, OwnedBytes, Storage,
-};
+use quickwit_storage::{wrap_storage_with_long_term_cache, BundleStorage, OwnedBytes, Storage};
 use tantivy::collector::Collector;
 use tantivy::directory::FileSlice;
 use tantivy::error::AsyncIoError;
@@ -61,13 +59,14 @@ async fn get_leaf_search_split_semaphore() -> SemaphorePermit<'static> {
         .expect("Failed to acquire permit. This should never happen! Please, report on https://github.com/quickwit-oss/quickwit/issues.")
 }
 
-fn global_split_footer_cache() -> &'static MemorySizedCache<String> {
-    static INSTANCE: OnceCell<MemorySizedCache<String>> = OnceCell::new();
+fn global_split_footer_cache() -> &'static moka::sync::Cache<String, OwnedBytes> {
+    static INSTANCE: OnceCell<moka::sync::Cache<String, OwnedBytes>> = OnceCell::new();
     INSTANCE.get_or_init(|| {
         let config = get_searcher_config_instance();
-        MemorySizedCache::with_capacity_in_bytes(
-            config.split_footer_cache_capacity.get_bytes() as usize
-        )
+        moka::sync::Cache::builder()
+            .max_capacity(config.split_footer_cache_capacity.get_bytes())
+            .weigher(|_key, payload: &OwnedBytes| payload.len() as u32)
+            .build()
     })
 }
 
@@ -97,7 +96,7 @@ async fn get_split_footer_from_cache_or_fetch(
             )
         })?;
 
-    global_split_footer_cache().put(
+    global_split_footer_cache().insert(
         split_and_footer_offsets.split_id.to_owned(),
         footer_data_opt.clone(),
     );

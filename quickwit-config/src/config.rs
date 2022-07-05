@@ -22,12 +22,11 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context};
-use byte_unit::Byte;
 use json_comments::StripComments;
 use once_cell::sync::OnceCell;
 use quickwit_common::net::{get_socket_addr, HostAddr};
-use quickwit_common::new_coolid;
 use quickwit_common::uri::{Extension, Uri, FILE_PROTOCOL};
+use quickwit_common::{new_coolid, Byte};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 use tracing::{info, warn};

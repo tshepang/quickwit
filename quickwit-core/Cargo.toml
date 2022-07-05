@@ -12,7 +12,6 @@ documentation = "https://quickwit.io/docs/"
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
-byte-unit = { version = "4", default-features = false, features = ["serde"] }
 futures = "0.3"
 futures-util = { version = "0.3.1", default-features = false }
 quickwit-actors = { version = "0.3.1", path = "../quickwit-actors" }

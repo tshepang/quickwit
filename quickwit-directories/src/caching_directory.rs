@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::{fmt, io};
 
 use async_trait::async_trait;
+use quickwit_common::Byte;
 use quickwit_storage::SliceCache;
 use tantivy::directory::error::OpenReadError;
 use tantivy::directory::{FileHandle, OwnedBytes};
@@ -48,13 +49,10 @@ impl CachingDirectory {
     /// The overall number of bytes held in memory may exceed the capacity at one point
     /// if a read request is large than `capacity_in_bytes`.
     /// In that case, the read payload will not be saved in the cache.
-    pub fn new_with_capacity_in_bytes(
-        underlying: Arc<dyn Directory>,
-        capacity_in_bytes: usize,
-    ) -> CachingDirectory {
+    pub fn new_with_capacity(underlying: Arc<dyn Directory>, capacity: Byte) -> CachingDirectory {
         CachingDirectory {
             underlying,
-            cache: Arc::new(SliceCache::with_capacity_in_bytes(capacity_in_bytes)),
+            cache: Arc::new(SliceCache::with_capacity(capacity)),
         }
     }
 
@@ -162,6 +160,7 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
+    use quickwit_common::Byte;
     use tantivy::directory::RamDirectory;
     use tantivy::Directory;
 
@@ -174,8 +173,10 @@ mod tests {
         let test_path = Path::new("test");
         ram_directory.atomic_write(test_path, &b"test"[..])?;
         let debug_proxy_directory = Arc::new(DebugProxyDirectory::wrap(ram_directory));
-        let caching_directory =
-            CachingDirectory::new_with_capacity_in_bytes(debug_proxy_directory.clone(), 10_000);
+        let caching_directory = CachingDirectory::new_with_capacity(
+            debug_proxy_directory.clone(),
+            Byte::from_bytes(10_000u64),
+        );
         caching_directory.atomic_read(test_path)?;
         caching_directory.atomic_read(test_path)?;
         assert_eq!(debug_proxy_directory.drain_read_operations().count(), 1);

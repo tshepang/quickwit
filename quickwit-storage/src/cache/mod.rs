@@ -18,7 +18,6 @@
 // along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 mod in_ram_slice_cache;
-mod memory_sized_cache;
 mod quickwit_cache;
 mod storage_with_cache;
 
@@ -30,7 +29,6 @@ use async_trait::async_trait;
 use once_cell::sync::OnceCell;
 
 pub use self::in_ram_slice_cache::SliceCache;
-pub use self::memory_sized_cache::MemorySizedCache;
 use crate::cache::quickwit_cache::QuickwitCache;
 use crate::cache::storage_with_cache::StorageWithCache;
 use crate::{OwnedBytes, Storage};

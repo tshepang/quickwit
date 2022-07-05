@@ -11,6 +11,7 @@ documentation = "https://quickwit.io/docs/"
 
 [dependencies]
 anyhow = "1"
+byte-unit = { version = "4", default-features = false, features = ["serde"] }
 colored = "2"
 env_logger = "0.9"
 futures = "0.3"
