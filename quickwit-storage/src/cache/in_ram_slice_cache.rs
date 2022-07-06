@@ -34,6 +34,7 @@ struct SliceAddress {
 /// A simple in-resident memory slice cache.
 pub struct SliceCache {
     cache: moka::sync::Cache<SliceAddress, OwnedBytes>,
+    capacity: Option<Byte>,
 }
 
 impl SliceCache {
@@ -43,7 +44,7 @@ impl SliceCache {
             .max_capacity(capacity.get_bytes())
             .weigher(|_key, payload: &OwnedBytes| payload.len() as u32)
             .build();
-        SliceCache { cache }
+        SliceCache { cache, capacity: Some(capacity) }
     }
 
     /// Creates a slice cache that nevers removes any entry.
@@ -51,10 +52,11 @@ impl SliceCache {
         let cache = moka::sync::Cache::builder()
             .weigher(|_key, payload: &OwnedBytes| payload.len() as u32)
             .build();
-        SliceCache { cache }
+        SliceCache { cache, capacity: None }
     }
 
-    pub fn sync(&self) -> Byte {
+    pub fn size_in_cache(&self) -> Byte {
+        use moka::sync::ConcurrentCacheExt;
         self.cache.sync();
         Byte::from_bytes(self.cache.weighted_size())
     }
@@ -72,8 +74,15 @@ impl SliceCache {
     /// This may fail silently if the owned_bytes slice is larger than the cache
     /// capacity.
     pub fn put(&self, path: PathBuf, byte_range: Range<usize>, bytes: OwnedBytes) {
+        // use moka::sync::ConcurrentCacheExt;
+        if let Some(capacity) = self.capacity {
+            if byte_range.len() as u64 > capacity.get_bytes() {
+                return;
+            }
+        }
         let slice_addr = SliceAddress { path, byte_range };
         self.cache.insert(slice_addr, bytes);
+        // self.cache.sync();
     }
 }
 
@@ -101,11 +110,12 @@ mod tests {
 
         {
             let data = OwnedBytes::new(&b"fghij"[..]);
+            assert_eq!(cache.size_in_cache().get_bytes(), 5);
             cache.put(PathBuf::from("5"), 0..5, data);
+            // cache.debug();
             assert_eq!(cache.get(Path::new("5"), 0..5).unwrap(), &b"fghij"[..]);
             // our two first entries should have be removed from the cache
             assert_eq!(cache.size_in_cache().get_bytes(), 5);
-
             assert!(cache.get(Path::new("2"), 0..2).is_none());
             assert!(cache.get(Path::new("3"), 0..3).is_none());
         }
