@@ -20,6 +20,7 @@
 use std::borrow::Borrow;
 use std::hash::Hash;
 use std::sync::Mutex;
+use std::time::{Instant, Duration};
 
 use lru::{KeyRef, LruCache};
 use tracing::{error, warn};
@@ -42,7 +43,7 @@ impl Capacity {
     }
 }
 struct NeedMutMemorySizedCache<K: Hash + Eq> {
-    lru_cache: LruCache<K, OwnedBytes>,
+    lru_cache: LruCache<K, (Instant, OwnedBytes)>,
     num_items: usize,
     num_bytes: u64,
     capacity: Capacity,
@@ -94,20 +95,23 @@ impl<K: Hash + Eq> NeedMutMemorySizedCache<K> {
         KeyRef<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let item_opt = self.lru_cache.get(cache_key).cloned();
-        if let Some(item) = item_opt.as_ref() {
+        let item_opt = self.lru_cache.get_mut(cache_key);
+        if let Some((instant, item)) = item_opt {
+            *instant = Instant::now();
             self.cache_counters.hits_num_items.inc();
             self.cache_counters.hits_num_bytes.inc_by(item.len() as u64);
+            Some(item.clone())
         } else {
             self.cache_counters.misses_num_items.inc();
+            None
         }
-        item_opt
     }
 
     /// Attempt to put the given amount of data in the cache.
     /// This may fail silently if the owned_bytes slice is larger than the cache
     /// capacity.
     fn put(&mut self, key: K, bytes: OwnedBytes) {
+        let now = Instant::now();
         if self.capacity.exceeds_capacity(bytes.len()) {
             // The value does not fit in the cache. We simply don't store it.
             warn!(
@@ -117,14 +121,20 @@ impl<K: Hash + Eq> NeedMutMemorySizedCache<K> {
             );
             return;
         }
-        if let Some(previous_data) = self.lru_cache.pop(&key) {
+        if let Some((_, previous_data)) = self.lru_cache.pop(&key) {
             self.drop_item(previous_data.len() as u64);
         }
         while self
             .capacity
             .exceeds_capacity(self.num_bytes as usize + bytes.len())
         {
-            if let Some((_, bytes)) = self.lru_cache.pop_lru() {
+            const DO_NO_EVICT_DURATION_LIMIT: Duration = Duration::from_secs(60);
+            if let Some((_, (instant, _))) = self.lru_cache.peek_lru() {
+                if now.duration_since(*instant) < DO_NO_EVICT_DURATION_LIMIT {
+                    return;
+                }
+            }
+            if let Some((_, (_, bytes))) = self.lru_cache.pop_lru() {
                 self.drop_item(bytes.len() as u64);
             } else {
                 error!(
@@ -136,7 +146,7 @@ impl<K: Hash + Eq> NeedMutMemorySizedCache<K> {
             }
         }
         self.record_item(bytes.len() as u64);
-        self.lru_cache.put(key, bytes);
+        self.lru_cache.put(key, (now, bytes));
     }
 }
 
