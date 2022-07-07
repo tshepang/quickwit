@@ -77,7 +77,7 @@ pub fn build_index_command<'a>() -> Command<'a> {
                         .required(false),
                     arg!(--overwrite "Overwrites pre-existing index. This will delete all existing data stored at `index-uri` before creating a new index.")
                         .required(false),
-                    arg!(-y --"assume-yes" "Answer yes for all questions.")
+                    arg!(-y --"assume-yes" "Assume "yes" as an answer to all prompts and run non-interactively.")
                         .required(false),
                 ])
             )
@@ -337,7 +337,7 @@ impl IndexCliCommand {
             .expect("`config` is a required arg.")?;
         let data_dir = matches.value_of("data-dir").map(PathBuf::from);
         let overwrite = matches.is_present("overwrite");
-        let assume_yes = matches.is_present("assume_yes");
+        let assume_yes = matches.is_present("assume-yes");
 
         Ok(Self::Create(CreateIndexArgs {
             config_uri,
@@ -790,11 +790,11 @@ pub async fn create_index_cli(args: CreateIndexArgs) -> anyhow::Result<()> {
         quickwit_config.default_index_root_uri(),
     );
 
-    // On overwrite and if assume yes if false, ask the user to confirm the destructive operation.
+    // On overwrite and if assume yes is false, ask the user to confirm the destructive operation.
     if args.overwrite && !args.assume_yes {
         // Stop if user answers no.
         if !prompt_confirmation(
-            "This operation will delete all your index data. Is this ok?",
+            "This operation will delete all the pre-existing index data. Continue?",
             None,
         ) {
             return Ok(());

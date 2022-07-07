@@ -134,7 +134,7 @@ pub fn make_table<T: Tabled>(
         .with(Modify::new(Rows::single(0)).with(Alignment::center()))
 }
 
-/// Prompt for user confirmation.
+/// Prompts for user confirmation.
 fn prompt_confirmation(prompt: &str, default: Option<bool>) -> bool {
     if Confirm::with_theme(&ColorfulTheme::default())
         .with_prompt(prompt)
