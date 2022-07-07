@@ -77,7 +77,7 @@ pub fn build_index_command<'a>() -> Command<'a> {
                         .required(false),
                     arg!(--overwrite "Overwrites pre-existing index. This will delete all existing data stored at `index-uri` before creating a new index.")
                         .required(false),
-                    arg!(-y --"assume-yes" "Assume "yes" as an answer to all prompts and run non-interactively.")
+                    arg!(-y --"assume-yes" "Assume 'yes' as an answer to all prompts and run non-interactively.")
                         .required(false),
                 ])
             )
