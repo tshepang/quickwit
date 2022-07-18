@@ -29,7 +29,7 @@ use regex::Regex;
 // Matches ${value} and captures the value
 // Ignores whitespaces in curly braces
 static TEMPLATE_ENV_VAR_CAPTURE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\$\{\s*([A-Za-z0-9_]+)\s*\}").unwrap());
+    Lazy::new(|| Regex::new(r"\$\{\s*([A-Za-z0-9_]+)\s*}").unwrap());
 
 pub fn render_config_file(contents: OwnedBytes) -> Result<String> {
     let contents_as_string =
