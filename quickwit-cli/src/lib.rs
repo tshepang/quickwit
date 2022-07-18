@@ -33,6 +33,8 @@ use tabled::object::Rows;
 use tabled::{Alignment, Header, Modify, Rotate, Style, Table, Tabled};
 use tracing::info;
 
+use crate::template::render_config_file;
+
 pub mod cli;
 pub mod index;
 pub mod service;
@@ -76,7 +78,8 @@ async fn load_quickwit_config(
     data_dir: Option<PathBuf>,
 ) -> anyhow::Result<QuickwitConfig> {
     let config_content = load_file(uri).await?;
-    let config = QuickwitConfig::load(uri, config_content.as_slice(), data_dir).await?;
+    let rendered_config = render_config_file(config_content)?;
+    let config = QuickwitConfig::load(uri, rendered_config.as_bytes(), data_dir).await?;
     info!(config_uri = %uri, config = ?config, "Loaded Quickwit config.");
     Ok(config)
 }
