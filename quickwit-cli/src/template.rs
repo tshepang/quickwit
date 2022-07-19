@@ -38,7 +38,7 @@ pub fn render_config_file(contents: OwnedBytes) -> Result<String> {
     let mut data = HashMap::new();
 
     for captured in TEMPLATE_ENV_VAR_CAPTURE.captures_iter(&contents_as_string) {
-        let cap = captured.get(1).unwrap().as_str();
+        let cap = captured.get(1).unwrap().as_str(); // Captures always have one match
         let env_var =
             std::env::var(cap).context(format!("Unable to get environment variable {}", cap))?;
         data.insert(cap, env_var);
