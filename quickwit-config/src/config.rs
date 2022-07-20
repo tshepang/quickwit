@@ -162,20 +162,6 @@ impl Default for SearcherConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct S3Config {
-    pub region: Option<String>,
-    pub endpoint: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct StorageConfig {
-    #[serde(rename = "s3")]
-    pub s3_config: S3Config,
-}
-
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct QuickwitConfig {
@@ -208,8 +194,6 @@ pub struct QuickwitConfig {
     #[serde(rename = "searcher")]
     #[serde(default)]
     pub searcher_config: SearcherConfig,
-    #[serde(rename = "storage")]
-    pub storage_config: Option<StorageConfig>,
 }
 
 impl QuickwitConfig {
@@ -456,7 +440,6 @@ impl Default for QuickwitConfig {
             data_dir_path: PathBuf::from(DEFAULT_DATA_DIR_PATH),
             indexer_config: IndexerConfig::default(),
             searcher_config: SearcherConfig::default(),
-            storage_config: None,
         }
     }
 }
@@ -478,14 +461,15 @@ impl std::fmt::Debug for QuickwitConfig {
             .field("default_index_root_uri", &self.default_index_root_uri())
             .field("indexer_config", &self.indexer_config)
             .field("searcher_config", &self.searcher_config)
-            .field("storage_config", &self.storage_config)
             .finish()
     }
 }
 
 /// Deserializes and validates a [`Uri`].
 pub(super) fn deser_valid_uri<'de, D>(deserializer: D) -> Result<Option<Uri>, D::Error>
-where D: Deserializer<'de> {
+where
+    D: Deserializer<'de>,
+{
     let uri_opt: Option<String> = Deserialize::deserialize(deserializer)?;
     uri_opt
         .map(|uri| Uri::try_new(&uri))
@@ -551,13 +535,6 @@ mod tests {
                     }
                 );
 
-                assert_eq!(
-                    config.storage_config.unwrap().s3_config,
-                    S3Config {
-                        region: Some("us-east-1".to_string()),
-                        endpoint: Some("https://s3.us-east-1.amazonaws.com".to_string()),
-                    }
-                );
                 Ok(())
             }
         };
@@ -622,7 +599,6 @@ mod tests {
             config.metastore_uri(),
             "postgres://username:password@host:port/db"
         );
-        assert!(config.storage_config.is_none());
     }
 
     #[test]
