@@ -2731,6 +2731,7 @@ dependencies = [
  "quickwit-telemetry",
  "regex",
  "reqwest",
+ "serde",
  "serde_json",
  "serial_test",
  "tabled",

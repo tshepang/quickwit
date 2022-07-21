@@ -3,7 +3,7 @@ name = "quickwit-cli"
 version = "0.3.1"
 authors = ["Quickwit, Inc. <hello@quickwit.io>"]
 edition = "2021"
-license = "AGPL-3.0-or-later" # For a commercial, license, contact hello@quickwit.io
+license = "AGPL-3.0-or-later"                               # For a commercial, license, contact hello@quickwit.io
 description = "Quickwit is a cost-efficient search engine."
 repository = "https://github.com/quickwit-oss/quickwit"
 homepage = "https://quickwit.io/"
@@ -52,6 +52,7 @@ quickwit-storage = { version = "0.3.1", path = "../quickwit-storage" }
 quickwit-telemetry = { version = "0.3.1", path = "../quickwit-telemetry" }
 new_string_template = "1.3.1"
 regex = "1.6.0"
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tabled = "0.7"
 tempfile = "3"
@@ -65,7 +66,7 @@ tracing-opentelemetry = "0.17"
 tracing-subscriber = { version = "0.3", features = [
   "time",
   "std",
-  "env-filter"
+  "env-filter",
 ] }
 
 [dev-dependencies]
@@ -73,7 +74,7 @@ assert_cmd = "2"
 predicates = "2"
 reqwest = { version = "0.11", default-features = false, features = [
   "json",
-  "rustls-tls"
+  "rustls-tls",
 ] }
 serial_test = "0.8.0"
 
@@ -85,11 +86,11 @@ release-feature-set = [
   "quickwit-metastore/postgres",
   "quickwit-indexing/kafka",
   "quickwit-indexing/kinesis",
-  "openssl-support"
+  "openssl-support",
 ]
 release-feature-vendored-set = [
   "quickwit-metastore/postgres",
   "quickwit-indexing/vendored-kafka",
   "quickwit-indexing/kinesis",
-  "openssl-support"
+  "openssl-support",
 ]

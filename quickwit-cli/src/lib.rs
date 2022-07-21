@@ -17,10 +17,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <http://www.gnu.org/licenses/>.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use once_cell::sync::Lazy;
 use quickwit_common::run_checklist;
 use quickwit_common::uri::Uri;
@@ -31,7 +32,7 @@ use quickwit_storage::{load_file, quickwit_storage_uri_resolver};
 use regex::Regex;
 use tabled::object::Rows;
 use tabled::{Alignment, Header, Modify, Rotate, Style, Table, Tabled};
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::template::render_config_file;
 
@@ -80,8 +81,63 @@ async fn load_quickwit_config(
     let config_content = load_file(uri).await?;
     let rendered_config = render_config_file(config_content)?;
     let config = QuickwitConfig::load(uri, rendered_config.as_bytes(), data_dir).await?;
+    // println!("{}", serde_json::to_string_pretty(&config)?);
+    let config = override_config_params(config)?;
+    // println!("{}", serde_json::to_string_pretty(&config)?);
     info!(config_uri = %uri, config = ?config, "Loaded Quickwit config.");
     Ok(config)
+}
+
+fn override_config_params(config: QuickwitConfig) -> anyhow::Result<QuickwitConfig> {
+    let config_string = serde_json::to_string(&config)?; // Deserialize to fill with default values
+    let config_json: HashMap<String, serde_json::Value> = serde_json::from_str(&config_string)?;
+    let overridden_values: HashMap<String, serde_json::Value> =
+        change_params_recursive("", config_json)?
+            .into_iter()
+            .collect();
+    let overridden_config_string = serde_json::to_string(&overridden_values)?;
+    let quickwit_config = serde_json::from_str::<QuickwitConfig>(&overridden_config_string)?;
+    Ok(quickwit_config)
+}
+
+fn change_params_recursive(
+    prefix: &str,
+    json: impl IntoIterator<Item = (String, serde_json::Value)>,
+) -> anyhow::Result<impl IntoIterator<Item = (String, serde_json::Value)>> {
+    let mut overriden_config: HashMap<String, serde_json::Value> = HashMap::new();
+    for (key, mut val) in json.into_iter() {
+        // println!("key: {key}, value: {val}");
+        val = match val {
+            serde_json::Value::Null
+            | serde_json::Value::Bool(_)
+            | serde_json::Value::Number(_)
+            | serde_json::Value::String(_)
+            | serde_json::Value::Array(_) => {
+                let env_var_name = "QW_".to_string() + prefix + &key.to_uppercase();
+                let env_var = std::env::var(&env_var_name);
+                if let Ok(_) = env_var {
+                    debug!(
+                        ?env_var,
+                        key_name = env_var_name,
+                        "Key {key} overriden with env var {env_var_name}: {:?}",
+                        env_var
+                    );
+                } else {
+                    overriden_config.insert(key, val);
+                    continue;
+                }
+                let env_var = env_var.unwrap();
+                serde_json::from_str::<serde_json::Value>(&env_var)
+                    .context(format!("Unable to parse ENV variable: {env_var}"))?
+            }
+            serde_json::Value::Object(json) => {
+                let new_json = change_params_recursive(&(key.to_uppercase() + "_"), json)?;
+                serde_json::Value::Object(new_json.into_iter().collect())
+            }
+        };
+        overriden_config.insert(key, val);
+    }
+    Ok(overriden_config)
 }
 
 /// Runs connectivity checks for a given `metastore_uri` and `index_id`.
