@@ -2982,6 +2982,7 @@ version = "0.3.1"
 dependencies = [
  "anyhow",
  "byte-unit",
+ "futures",
  "json_comments",
  "once_cell",
  "quickwit-common",

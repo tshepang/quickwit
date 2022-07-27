@@ -26,7 +26,7 @@ use std::sync::Arc;
 use anyhow::bail;
 use chitchat::transport::UdpTransport;
 use chitchat::FailureDetectorConfig;
-use quickwit_config::QuickwitConfig;
+use quickwit_config::QuickwitConfigObject;
 
 pub use crate::cluster::{
     create_cluster_for_test, grpc_addr_from_listen_addr_for_test, Cluster, ClusterState, Member,
@@ -70,22 +70,22 @@ impl TryFrom<&str> for QuickwitService {
 }
 
 pub async fn start_cluster_service(
-    quickwit_config: &QuickwitConfig,
+    quickwit_config: &QuickwitConfigObject,
     services: &HashSet<QuickwitService>,
 ) -> anyhow::Result<Arc<Cluster>> {
     let member = Member::new(
         quickwit_config.node_id.clone(),
         unix_timestamp(),
-        quickwit_config.gossip_advertise_addr().await?,
+        quickwit_config.gossip_advertise_addr,
     );
 
     let cluster = Cluster::join(
         member,
         services,
-        quickwit_config.gossip_listen_addr().await?,
+        quickwit_config.gossip_listen_addr,
         quickwit_config.cluster_id.clone(),
-        quickwit_config.grpc_advertise_addr().await?,
-        quickwit_config.peer_seed_addrs().await?,
+        quickwit_config.grpc_advertise_addr,
+        quickwit_config.peer_seed_addrs.clone(),
         FailureDetectorConfig::default(),
         &UdpTransport,
     )

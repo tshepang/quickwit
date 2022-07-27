@@ -20,14 +20,14 @@
 use std::sync::Arc;
 
 use quickwit_common::uri::Uri;
-use quickwit_config::QuickwitConfig;
+use quickwit_config::{QuickwitConfig, QuickwitConfigObject};
 use warp::{Filter, Rejection};
 
 use crate::{with_arg, QuickwitBuildInfo};
 
 pub fn node_info_handler(
     build_info: Arc<QuickwitBuildInfo>,
-    config: Arc<QuickwitConfig>,
+    config: Arc<QuickwitConfigObject>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = Rejection> + Clone {
     node_version_handler(build_info).or(node_config_handler(config))
 }
@@ -46,7 +46,7 @@ async fn get_version(build_info: Arc<QuickwitBuildInfo>) -> Result<impl warp::Re
 }
 
 fn node_config_handler(
-    config: Arc<QuickwitConfig>,
+    config: Arc<QuickwitConfigObject>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = Rejection> + Clone {
     warp::path("config")
         .and(warp::path::end())
@@ -54,13 +54,16 @@ fn node_config_handler(
         .and_then(get_config)
 }
 
-async fn get_config(config: Arc<QuickwitConfig>) -> Result<impl warp::Reply, Rejection> {
+async fn get_config(config: Arc<QuickwitConfigObject>) -> Result<impl warp::Reply, Rejection> {
     // We need to hide sensitive information from metastore URI.
     let mut config_to_serialize = (*config).clone();
-    config_to_serialize.metastore_uri = config_to_serialize
-        .metastore_uri
-        .map(|uri| uri.as_redacted_str().to_string())
-        .map(Uri::new);
+    let redacted_uri = Uri::new(
+        config_to_serialize
+            .metastore_uri
+            .as_redacted_str()
+            .to_string(),
+    );
+    config_to_serialize.metastore_uri = redacted_uri;
     Ok(warp::reply::json(&config_to_serialize))
 }
 
@@ -81,8 +84,8 @@ mod tests {
             commit_date: "commit_date",
             version: "version",
         };
-        let mut config = QuickwitConfig::default();
-        config.metastore_uri = Some(Uri::new("postgresql://username:password@db".to_string()));
+        let mut config = QuickwitConfig::default().resolve().await?;
+        config.metastore_uri = Uri::new("postgresql://username:password@db".to_string());
         let handler =
             super::node_info_handler(Arc::new(build_info.clone()), Arc::new(config.clone()))
                 .recover(recover_fn);
