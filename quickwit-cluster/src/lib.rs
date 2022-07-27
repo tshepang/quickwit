@@ -85,7 +85,7 @@ pub async fn start_cluster_service(
         quickwit_config.gossip_listen_addr,
         quickwit_config.cluster_id.clone(),
         quickwit_config.grpc_advertise_addr,
-        quickwit_config.peer_seed_addrs.clone(),
+        quickwit_config.peer_seed_addrs().await?,
         FailureDetectorConfig::default(),
         &UdpTransport,
     )
