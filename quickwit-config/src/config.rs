@@ -456,7 +456,7 @@ impl QuickwitConfig {
 
     fn metastore_uri(&self) -> anyhow::Result<Uri> {
         if let Some(uri_string) = &self.metastore_uri {
-            Uri::try_new(&uri_string)
+            Uri::try_new(uri_string)
                 .context(format!("Unable to parse metastore uri from {uri_string}"))
         } else {
             Ok(default_metastore_uri(&self.data_dir_path))
@@ -465,7 +465,7 @@ impl QuickwitConfig {
 
     fn default_index_root_uri(&self) -> anyhow::Result<Uri> {
         if let Some(uri_string) = &self.default_index_root_uri {
-            Uri::try_new(&uri_string).context(format!(
+            Uri::try_new(uri_string).context(format!(
                 "Unable to parse default_index_root_uri from {uri_string}"
             ))
         } else {
