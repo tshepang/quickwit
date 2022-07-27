@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use quickwit_actors::{Mailbox, Universe};
-use quickwit_config::{QuickwitConfig, QuickwitConfigObject};
+use quickwit_config::QuickwitConfigObject;
 use quickwit_ingest_api::IngestApiService;
 use quickwit_metastore::Metastore;
 use quickwit_storage::StorageUriResolver;

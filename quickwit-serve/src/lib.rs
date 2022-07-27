@@ -42,7 +42,7 @@ use format::Format;
 use quickwit_actors::{Mailbox, Universe};
 use quickwit_cluster::{Cluster, QuickwitService};
 use quickwit_common::uri::Uri;
-use quickwit_config::{QuickwitConfig, QuickwitConfigObject};
+use quickwit_config::QuickwitConfigObject;
 use quickwit_core::IndexService;
 use quickwit_indexing::actors::IndexingService;
 use quickwit_indexing::start_indexer_service;

@@ -55,7 +55,7 @@ use anyhow::Context;
 use itertools::Itertools;
 use quickwit_cluster::Cluster;
 use quickwit_config::{
-    build_doc_mapper, QuickwitConfig, QuickwitConfigObject, SEARCHER_CONFIG_INSTANCE,
+    build_doc_mapper, QuickwitConfigObject, SEARCHER_CONFIG_INSTANCE,
 };
 use quickwit_doc_mapper::tag_pruning::extract_tags_from_query;
 use quickwit_doc_mapper::DocMapper;

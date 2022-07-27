@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use quickwit_common::uri::Uri;
-use quickwit_config::{QuickwitConfig, QuickwitConfigObject};
+use quickwit_config::QuickwitConfigObject;
 use warp::{Filter, Rejection};
 
 use crate::{with_arg, QuickwitBuildInfo};
@@ -70,6 +70,7 @@ async fn get_config(config: Arc<QuickwitConfigObject>) -> Result<impl warp::Repl
 #[cfg(test)]
 mod tests {
     use assert_json_diff::assert_json_include;
+    use quickwit_config::QuickwitConfig;
 
     use super::*;
     use crate::recover_fn;
