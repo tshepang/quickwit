@@ -61,7 +61,10 @@ pub fn render_config_file(contents: OwnedBytes) -> Result<String> {
                     );
                     default_val.to_string()
                 } else {
-                    bail!("Couldn't find ENV_VAR: {env_var_name} and the default value for the given template");
+                    bail!(
+                        "Couldn't find ENV_VAR: {env_var_name} and the default value for the \
+                         given template"
+                    );
                 }
             }
         };
