@@ -54,7 +54,9 @@ use std::sync::Arc;
 use anyhow::Context;
 use itertools::Itertools;
 use quickwit_cluster::Cluster;
-use quickwit_config::{build_doc_mapper, QuickwitConfig, SEARCHER_CONFIG_INSTANCE, QuickwitConfigObject};
+use quickwit_config::{
+    build_doc_mapper, QuickwitConfig, QuickwitConfigObject, SEARCHER_CONFIG_INSTANCE,
+};
 use quickwit_doc_mapper::tag_pruning::extract_tags_from_query;
 use quickwit_doc_mapper::DocMapper;
 use quickwit_metastore::{Metastore, SplitMetadata, SplitState};

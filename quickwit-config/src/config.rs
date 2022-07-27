@@ -211,7 +211,6 @@ pub struct QuickwitConfigObject {
     pub gossip_listen_port: u16,
     pub grpc_listen_port: u16,
     pub peer_seeds: Vec<String>,
-    pub peer_seed_addrs: Vec<String>,
     #[serde(deserialize_with = "deser_valid_uri")]
     pub metastore_uri: Uri,
     #[serde(deserialize_with = "deser_valid_uri")]
@@ -247,6 +246,34 @@ impl QuickwitConfigObject {
             );
         }
         Ok(())
+    }
+
+    /// Returns the list of peer seed addresses. The addresses MUST NOT be resolved. Otherwise, the
+    /// DNS-based discovery mechanism implemented in Chitchat will not work correctly.
+    pub async fn peer_seed_addrs(&self) -> anyhow::Result<Vec<String>> {
+        let mut peer_seed_addrs = Vec::new();
+        let default_gossip_port = self.gossip_listen_port;
+
+        // We want to pass non-resolved addresses to Chitchat but still want to resolve them for
+        // validation purposes. Additionally, we need to append a default port if necessary and
+        // finally return the addresses as strings, which is tricky for IPv6. We let the logic baked
+        // in `HostAddr` handle this complexity.
+        for peer_seed in &self.peer_seeds {
+            let peer_seed_addr =
+                HostAddr::parse_with_default_port(peer_seed.as_str(), default_gossip_port)?;
+            if let Err(error) = peer_seed_addr.to_socket_addr().await {
+                warn!(peer_seed = %peer_seed_addr, error = ?error, "Failed to resolve peer seed address.");
+                continue;
+            }
+            peer_seed_addrs.push(peer_seed_addr.to_string())
+        }
+        if !self.peer_seeds.is_empty() && peer_seed_addrs.is_empty() {
+            bail!(
+                "Failed to resolve any of the peer seed addresses: `{}`",
+                self.peer_seeds.join(", ")
+            )
+        }
+        Ok(peer_seed_addrs)
     }
 }
 
@@ -332,7 +359,7 @@ impl QuickwitConfig {
 
     /// Returns the REST listen address of the node, i.e. the socket address on which the REST API
     /// service listens for TCP connections.
-    pub async fn rest_listen_addr(&self, listen_addr: &Host) -> anyhow::Result<SocketAddr> {
+    async fn rest_listen_addr(&self, listen_addr: &Host) -> anyhow::Result<SocketAddr> {
         listen_addr
             .with_port(self.rest_listen_port)
             .to_socket_addr()
@@ -347,7 +374,7 @@ impl QuickwitConfig {
 
     /// Returns the gRPC listen address of the node, i.e. the socket address on which the gRPC
     /// service listens for TCP connections.
-    pub async fn grpc_listen_addr(&self, listen_addr: &Host) -> anyhow::Result<SocketAddr> {
+    async fn grpc_listen_addr(&self, listen_addr: &Host) -> anyhow::Result<SocketAddr> {
         listen_addr
             .with_port(self.grpc_listen_port())
             .to_socket_addr()
@@ -355,7 +382,7 @@ impl QuickwitConfig {
     }
 
     /// Returns the advertise
-    pub fn advertise_addr(&self, listen_addr: &Host) -> anyhow::Result<Host> {
+    fn advertise_addr(&self, listen_addr: &Host) -> anyhow::Result<Host> {
         if let Ok(advertise_address) = env::var("QW_ADVERTISE_ADDRESS") {
             return advertise_address.parse().map(|addr| {
                 info!(advertise_address=%advertise_address, "Using advertise address from environment variable `QW_ADVERTISE_ADDRESS`.");
@@ -395,7 +422,7 @@ impl QuickwitConfig {
 
     /// Returns the gRPC public address of the node, i.e. the socket address to connect to in order
     /// to send gRPC requests to the node.
-    pub async fn grpc_advertise_addr(&self, listen_addr: &Host) -> anyhow::Result<SocketAddr> {
+    async fn grpc_advertise_addr(&self, listen_addr: &Host) -> anyhow::Result<SocketAddr> {
         self.advertise_addr(listen_addr)?
             .with_port(self.grpc_listen_port())
             .to_socket_addr()
@@ -411,7 +438,7 @@ impl QuickwitConfig {
 
     /// Returns the gossip listen address of the node, i.e. the UDP socket address on which the node
     /// receives gossip messages.
-    pub async fn gossip_listen_addr(&self, listen_addr: &Host) -> anyhow::Result<SocketAddr> {
+    async fn gossip_listen_addr(&self, listen_addr: &Host) -> anyhow::Result<SocketAddr> {
         listen_addr
             .with_port(self.gossip_listen_port())
             .to_socket_addr()
@@ -420,42 +447,14 @@ impl QuickwitConfig {
 
     /// Returns the gossip public address of the node, i.e. the socket address to send UDP packets
     /// to in order to gossip with the node.
-    pub async fn gossip_advertise_addr(&self, listen_addr: &Host) -> anyhow::Result<SocketAddr> {
+    async fn gossip_advertise_addr(&self, listen_addr: &Host) -> anyhow::Result<SocketAddr> {
         self.advertise_addr(listen_addr)?
             .with_port(self.gossip_listen_port())
             .to_socket_addr()
             .await
     }
 
-    /// Returns the list of peer seed addresses. The addresses MUST NOT be resolved. Otherwise, the
-    /// DNS-based discovery mechanism implemented in Chitchat will not work correctly.
-    pub async fn peer_seed_addrs(&self) -> anyhow::Result<Vec<String>> {
-        let mut peer_seed_addrs = Vec::new();
-        let default_gossip_port = self.gossip_listen_port();
-
-        // We want to pass non-resolved addresses to Chitchat but still want to resolve them for
-        // validation purposes. Additionally, we need to append a default port if necessary and
-        // finally return the addresses as strings, which is tricky for IPv6. We let the logic baked
-        // in `HostAddr` handle this complexity.
-        for peer_seed in &self.peer_seeds {
-            let peer_seed_addr =
-                HostAddr::parse_with_default_port(peer_seed.as_str(), default_gossip_port)?;
-            if let Err(error) = peer_seed_addr.to_socket_addr().await {
-                warn!(peer_seed = %peer_seed_addr, error = ?error, "Failed to resolve peer seed address.");
-                continue;
-            }
-            peer_seed_addrs.push(peer_seed_addr.to_string())
-        }
-        if !self.peer_seeds.is_empty() && peer_seed_addrs.is_empty() {
-            bail!(
-                "Failed to resolve any of the peer seed addresses: `{}`",
-                self.peer_seeds.join(", ")
-            )
-        }
-        Ok(peer_seed_addrs)
-    }
-
-    pub fn metastore_uri(&self) -> anyhow::Result<Uri> {
+    fn metastore_uri(&self) -> anyhow::Result<Uri> {
         if let Some(uri_string) = &self.metastore_uri {
             Uri::try_new(&uri_string)
                 .context(format!("Unable to parse metastore uri from {uri_string}"))
@@ -464,7 +463,7 @@ impl QuickwitConfig {
         }
     }
 
-    pub fn default_index_root_uri(&self) -> anyhow::Result<Uri> {
+    fn default_index_root_uri(&self) -> anyhow::Result<Uri> {
         if let Some(uri_string) = &self.default_index_root_uri {
             Uri::try_new(&uri_string).context(format!(
                 "Unable to parse default_index_root_uri from {uri_string}"
@@ -491,7 +490,6 @@ impl QuickwitConfig {
             gossip_listen_port: self.gossip_listen_port(),
             grpc_listen_port: self.grpc_listen_port(),
             peer_seeds: self.peer_seeds.clone(),
-            peer_seed_addrs: self.peer_seed_addrs().await?,
             metastore_uri: self.metastore_uri()?,
             default_index_root_uri: self.default_index_root_uri()?,
             data_dir_path: self.data_dir_path,
@@ -501,13 +499,14 @@ impl QuickwitConfig {
     }
 
     #[doc(hidden)]
-    pub fn for_test() -> anyhow::Result<Self> {
+    pub fn for_test() -> anyhow::Result<QuickwitConfigObject> {
         use quickwit_common::net::find_available_tcp_port;
 
         let indexer_config = Self {
             rest_listen_port: find_available_tcp_port()?,
             ..Default::default()
         };
+        let indexer_config = futures::executor::block_on(indexer_config.resolve())?;
         Ok(indexer_config)
     }
 }
@@ -556,19 +555,14 @@ impl std::fmt::Debug for QuickwitConfig {
 
 /// Deserializes a valid [`Uri`].
 pub(super) fn deser_valid_uri<'de, D>(deserializer: D) -> Result<Uri, D::Error>
-where
-    D: Deserializer<'de>,
-{
+where D: Deserializer<'de> {
     let uri_opt: String = Deserialize::deserialize(deserializer)?;
     Uri::try_new(&uri_opt).map_err(D::Error::custom)
 }
 
-
 /// Deserializes and validates a [`Uri`].
 pub(super) fn deser_and_valid_uri<'de, D>(deserializer: D) -> Result<Option<Uri>, D::Error>
-where
-    D: Deserializer<'de>,
-{
+where D: Deserializer<'de> {
     let uri_opt: Option<String> = Deserialize::deserialize(deserializer)?;
     uri_opt
         .map(|uri| Uri::try_new(&uri))
@@ -599,13 +593,14 @@ mod tests {
                     get_config_filepath(&format!("quickwit.{}", stringify!($file_extension)));
                 let config_uri = Uri::try_new(&config_filepath)?;
                 let file = std::fs::read_to_string(&config_filepath).unwrap();
-                let config = QuickwitConfig::from_uri(&config_uri, file.as_bytes()).await?.resolve().await?;
+                let config = QuickwitConfig::from_uri(&config_uri, file.as_bytes())
+                    .await?
+                    .resolve()
+                    .await?;
                 assert_eq!(config.version, 0);
                 assert_eq!(config.cluster_id, "quickwit-cluster");
                 assert_eq!(config.listen_address, Host::from(Ipv4Addr::UNSPECIFIED));
                 assert_eq!(config.rest_listen_port, 1111);
-                println!("{:?}", config.peer_seeds);
-                println!("{:?}", config.peer_seed_addrs);
                 assert_eq!(
                     config.peer_seeds,
                     vec![
@@ -741,7 +736,10 @@ mod tests {
             let quickwit_config = QuickwitConfig {
                 rest_listen_port: 1789,
                 ..Default::default()
-            };
+            }
+            .resolve()
+            .await
+            .unwrap();
             assert!(quickwit_config.peer_seed_addrs().await.unwrap().is_empty());
         }
         {
@@ -749,7 +747,10 @@ mod tests {
                 rest_listen_port: 1789,
                 peer_seeds: vec!["unresolvable-host".to_string()],
                 ..Default::default()
-            };
+            }
+            .resolve()
+            .await
+            .unwrap();
             assert!(quickwit_config.peer_seed_addrs().await.is_err());
         }
         {
@@ -763,7 +764,10 @@ mod tests {
                     "127.0.0.1:1337".to_string(),
                 ],
                 ..Default::default()
-            };
+            }
+            .resolve()
+            .await
+            .unwrap();
             assert_eq!(
                 quickwit_config.peer_seed_addrs().await.unwrap(),
                 vec![
@@ -782,23 +786,20 @@ mod tests {
             let quickwit_config = QuickwitConfig {
                 listen_address: Ipv4Addr::LOCALHOST.to_string(),
                 ..Default::default()
-            }.resolve().await.unwrap();
+            }
+            .resolve()
+            .await
+            .unwrap();
             assert_eq!(
-                quickwit_config
-                    .rest_listen_addr
-                    .to_string(),
+                quickwit_config.rest_listen_addr.to_string(),
                 "127.0.0.1:7280"
             );
             assert_eq!(
-                quickwit_config
-                    .gossip_listen_addr
-                    .to_string(),
+                quickwit_config.gossip_listen_addr.to_string(),
                 "127.0.0.1:7280"
             );
             assert_eq!(
-                quickwit_config
-                    .grpc_listen_addr
-                    .to_string(),
+                quickwit_config.grpc_listen_addr.to_string(),
                 "127.0.0.1:7281"
             );
         }
@@ -807,23 +808,20 @@ mod tests {
                 listen_address: Ipv4Addr::LOCALHOST.to_string(),
                 rest_listen_port: 1789,
                 ..Default::default()
-            }.resolve().await.unwrap();
+            }
+            .resolve()
+            .await
+            .unwrap();
             assert_eq!(
-                quickwit_config
-                    .rest_listen_addr
-                    .to_string(),
+                quickwit_config.rest_listen_addr.to_string(),
                 "127.0.0.1:1789"
             );
             assert_eq!(
-                quickwit_config
-                    .gossip_listen_addr
-                    .to_string(),
+                quickwit_config.gossip_listen_addr.to_string(),
                 "127.0.0.1:1789"
             );
             assert_eq!(
-                quickwit_config
-                    .grpc_listen_addr
-                    .to_string(),
+                quickwit_config.grpc_listen_addr.to_string(),
                 "127.0.0.1:1790"
             );
         }
@@ -834,23 +832,20 @@ mod tests {
                 gossip_listen_port: Some(1889),
                 grpc_listen_port: Some(1989),
                 ..Default::default()
-            }.resolve().await.unwrap();
+            }
+            .resolve()
+            .await
+            .unwrap();
             assert_eq!(
-                quickwit_config
-                    .rest_listen_addr
-                    .to_string(),
+                quickwit_config.rest_listen_addr.to_string(),
                 "127.0.0.1:1789"
             );
             assert_eq!(
-                quickwit_config
-                    .gossip_listen_addr
-                    .to_string(),
+                quickwit_config.gossip_listen_addr.to_string(),
                 "127.0.0.1:1889"
             );
             assert_eq!(
-                quickwit_config
-                    .grpc_listen_addr
-                    .to_string(),
+                quickwit_config.grpc_listen_addr.to_string(),
                 "127.0.0.1:1989"
             );
         }

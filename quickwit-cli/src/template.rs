@@ -19,11 +19,10 @@
 
 use std::collections::HashMap;
 
-use once_cell::sync::Lazy;
-use quickwit_storage::OwnedBytes;
-
 use anyhow::{Context, Result};
 use new_string_template::template::Template;
+use once_cell::sync::Lazy;
+use quickwit_storage::OwnedBytes;
 use regex::Regex;
 
 // Matches ${value} and captures the value
@@ -60,8 +59,9 @@ mod test {
 
     #[test]
     fn test_template_render() {
-        let mock_config =
-            OwnedBytes::new(b"metastore_uri: ${TEST_TEMPLATE_RENDER_ENV_VAR_PLEASE_DONT_NOTICE}".as_slice());
+        let mock_config = OwnedBytes::new(
+            b"metastore_uri: ${TEST_TEMPLATE_RENDER_ENV_VAR_PLEASE_DONT_NOTICE}".as_slice(),
+        );
         env::set_var(
             "TEST_TEMPLATE_RENDER_ENV_VAR_PLEASE_DONT_NOTICE",
             "s3://test-bucket/metastore",
@@ -72,14 +72,18 @@ mod test {
     }
     #[test]
     fn test_template_render_whitespaces() {
-        let mock_config =
-            OwnedBytes::new(b"metastore_uri: ${TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST}".as_slice());
-        let mock_config_trailing =
-            OwnedBytes::new(b"metastore_uri: ${TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST  }".as_slice());
-        let mock_config_first =
-            OwnedBytes::new(b"metastore_uri: ${   TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST}".as_slice());
-        let mock_config_mixed =
-            OwnedBytes::new(b"metastore_uri: ${  TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST    }".as_slice());
+        let mock_config = OwnedBytes::new(
+            b"metastore_uri: ${TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST}".as_slice(),
+        );
+        let mock_config_trailing = OwnedBytes::new(
+            b"metastore_uri: ${TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST  }".as_slice(),
+        );
+        let mock_config_first = OwnedBytes::new(
+            b"metastore_uri: ${   TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST}".as_slice(),
+        );
+        let mock_config_mixed = OwnedBytes::new(
+            b"metastore_uri: ${  TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST    }".as_slice(),
+        );
         env::set_var(
             "TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST",
             "s3://test-bucket/metastore",
@@ -90,7 +94,10 @@ mod test {
         let rendered_mixed = render_config_file(mock_config_mixed).unwrap();
         std::env::remove_var("TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST");
         assert_eq!(rendered, "metastore_uri: s3://test-bucket/metastore");
-        assert_eq!(rendered_trailing, "metastore_uri: s3://test-bucket/metastore");
+        assert_eq!(
+            rendered_trailing,
+            "metastore_uri: s3://test-bucket/metastore"
+        );
         assert_eq!(rendered_first, "metastore_uri: s3://test-bucket/metastore");
         assert_eq!(rendered_mixed, "metastore_uri: s3://test-bucket/metastore");
     }
