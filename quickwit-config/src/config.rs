@@ -555,7 +555,7 @@ impl std::fmt::Debug for QuickwitConfigBuilder {
 }
 
 /// Deserializes a valid [`Uri`].
-pub(super) fn _deser_and_valid_uri<'de, D>(deserializer: D) -> Result<Uri, D::Error>
+pub(super) fn _deser_valid_uri<'de, D>(deserializer: D) -> Result<Uri, D::Error>
 where D: Deserializer<'de> {
     let uri_opt: String = Deserialize::deserialize(deserializer)?;
     Uri::try_new(&uri_opt).map_err(D::Error::custom)
