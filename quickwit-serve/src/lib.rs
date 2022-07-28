@@ -42,7 +42,7 @@ use format::Format;
 use quickwit_actors::{Mailbox, Universe};
 use quickwit_cluster::{Cluster, QuickwitService};
 use quickwit_common::uri::Uri;
-use quickwit_config::QuickwitConfigObject;
+use quickwit_config::QuickwitConfig;
 use quickwit_core::IndexService;
 use quickwit_indexing::actors::IndexingService;
 use quickwit_indexing::start_indexer_service;
@@ -78,7 +78,7 @@ fn with_arg<T: Clone + Send>(arg: T) -> impl Filter<Extract = (T,), Error = Infa
 }
 
 struct QuickwitServices {
-    pub config: Arc<QuickwitConfigObject>,
+    pub config: Arc<QuickwitConfig>,
     pub build_info: Arc<QuickwitBuildInfo>,
     pub cluster: Arc<Cluster>,
     /// We do have a search service even on nodes that are not running `search`.
@@ -92,7 +92,7 @@ struct QuickwitServices {
 }
 
 pub async fn serve_quickwit(
-    config: QuickwitConfigObject,
+    config: QuickwitConfig,
     services: &HashSet<QuickwitService>,
 ) -> anyhow::Result<()> {
     let metastore = quickwit_metastore_uri_resolver()

@@ -18,7 +18,7 @@
 // along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 use std::env;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -71,7 +71,7 @@ fn default_node_id() -> String {
 }
 
 fn default_listen_address() -> String {
-    "127.0.0.1".to_string()
+    Ipv4Addr::LOCALHOST.to_string()
 }
 
 fn default_rest_listen_port() -> u16 {
@@ -165,7 +165,7 @@ impl Default for SearcherConfig {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct QuickwitConfig {
+pub struct QuickwitConfigBuilder {
     pub version: usize,
     #[serde(default = "default_cluster_id")]
     pub cluster_id: String,
@@ -195,8 +195,8 @@ pub struct QuickwitConfig {
     pub searcher_config: SearcherConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuickwitConfigObject {
+#[derive(Debug, Clone, Serialize)]
+pub struct QuickwitConfig {
     pub version: usize,
     pub cluster_id: String,
     pub node_id: String,
@@ -211,16 +211,14 @@ pub struct QuickwitConfigObject {
     pub gossip_listen_port: u16,
     pub grpc_listen_port: u16,
     pub peer_seeds: Vec<String>,
-    #[serde(deserialize_with = "deser_valid_uri")]
     pub metastore_uri: Uri,
-    #[serde(deserialize_with = "deser_valid_uri")]
     pub default_index_root_uri: Uri,
     pub data_dir_path: PathBuf,
     pub indexer_config: IndexerConfig,
     pub searcher_config: SearcherConfig,
 }
 
-impl QuickwitConfigObject {
+impl QuickwitConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         validate_identifier("Cluster ID", &self.cluster_id)?;
         validate_identifier("Node ID", &self.node_id)?;
@@ -232,12 +230,14 @@ impl QuickwitConfigObject {
             );
         }
         if self.peer_seeds.is_empty() {
-            warn!("Seed list is empty.");
+            warn!("Peer seed list is empty.");
         }
         let data_dir_uri = Uri::try_new(&self.data_dir_path.to_string_lossy())?;
 
         if !data_dir_uri.protocol().is_file() {
-            bail!("Data dir must be located on local file system")
+            bail!(
+                "Data dir must be located on local file system. Current location: `{data_dir_uri}`"
+            )
         }
         if !self.data_dir_path.exists() {
             bail!(
@@ -277,14 +277,14 @@ impl QuickwitConfigObject {
     }
 }
 
-impl QuickwitConfig {
+impl QuickwitConfigBuilder {
     /// Parses and validates a [`QuickwitConfig`] from a given URI and config content.
     pub async fn load(
         uri: &Uri,
         config_content: &[u8],
         data_dir_path_opt: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
-        let mut config = QuickwitConfig::from_uri(uri, config_content).await?;
+        let mut config = QuickwitConfigBuilder::from_uri(uri, config_content).await?;
         if let Some(data_dir_path) = data_dir_path_opt {
             info!(
                 data_dir_path = %data_dir_path.display(),
@@ -341,12 +341,14 @@ impl QuickwitConfig {
             );
         }
         if self.peer_seeds.is_empty() {
-            warn!("Seed list is empty.");
+            warn!("Peer seed list is empty.");
         }
         let data_dir_uri = Uri::try_new(&self.data_dir_path.to_string_lossy())?;
 
         if !data_dir_uri.protocol().is_file() {
-            bail!("Data dir must be located on local file system")
+            bail!(
+                "Data dir must be located on local file system. Current location: `{data_dir_uri}`"
+            )
         }
         if !self.data_dir_path.exists() {
             bail!(
@@ -405,7 +407,6 @@ impl QuickwitConfig {
                 )
             });
         }
-        // This is safe, check the declaration.
         if listen_addr.is_unspecified() {
             if let Some((interface_name, private_ip)) = find_private_ip() {
                 info!(advertise_address=%private_ip, interface_name=%interface_name, "Using sniffed advertise address.");
@@ -473,9 +474,9 @@ impl QuickwitConfig {
         }
     }
 
-    pub async fn resolve(self) -> anyhow::Result<QuickwitConfigObject> {
+    pub async fn resolve(self) -> anyhow::Result<QuickwitConfig> {
         let listen_address = Host::from_str(&self.listen_address)?;
-        Ok(QuickwitConfigObject {
+        Ok(QuickwitConfig {
             version: self.version,
             cluster_id: self.cluster_id.clone(),
             node_id: self.node_id.clone(),
@@ -499,7 +500,7 @@ impl QuickwitConfig {
     }
 
     #[doc(hidden)]
-    pub fn for_test() -> anyhow::Result<QuickwitConfigObject> {
+    pub fn for_test() -> anyhow::Result<QuickwitConfig> {
         use quickwit_common::net::find_available_tcp_port;
 
         let indexer_config = Self {
@@ -511,7 +512,7 @@ impl QuickwitConfig {
     }
 }
 
-impl Default for QuickwitConfig {
+impl Default for QuickwitConfigBuilder {
     fn default() -> Self {
         Self {
             version: 0,
@@ -532,7 +533,7 @@ impl Default for QuickwitConfig {
     }
 }
 
-impl std::fmt::Debug for QuickwitConfig {
+impl std::fmt::Debug for QuickwitConfigBuilder {
     fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         formatter
             .debug_struct("QuickwitConfig")
@@ -554,14 +555,14 @@ impl std::fmt::Debug for QuickwitConfig {
 }
 
 /// Deserializes a valid [`Uri`].
-pub(super) fn deser_valid_uri<'de, D>(deserializer: D) -> Result<Uri, D::Error>
+pub(super) fn _deser_and_valid_uri<'de, D>(deserializer: D) -> Result<Uri, D::Error>
 where D: Deserializer<'de> {
     let uri_opt: String = Deserialize::deserialize(deserializer)?;
     Uri::try_new(&uri_opt).map_err(D::Error::custom)
 }
 
 /// Deserializes and validates a [`Uri`].
-pub(super) fn deser_and_valid_uri<'de, D>(deserializer: D) -> Result<Option<Uri>, D::Error>
+pub(super) fn deser_and_validate_uri<'de, D>(deserializer: D) -> Result<Option<Uri>, D::Error>
 where D: Deserializer<'de> {
     let uri_opt: Option<String> = Deserialize::deserialize(deserializer)?;
     uri_opt
@@ -593,7 +594,7 @@ mod tests {
                     get_config_filepath(&format!("quickwit.{}", stringify!($file_extension)));
                 let config_uri = Uri::try_new(&config_filepath)?;
                 let file = std::fs::read_to_string(&config_filepath).unwrap();
-                let config = QuickwitConfig::from_uri(&config_uri, file.as_bytes())
+                let config = QuickwitConfigBuilder::from_uri(&config_uri, file.as_bytes())
                     .await?
                     .resolve()
                     .await?;
@@ -645,7 +646,7 @@ mod tests {
         let config_filepath = get_config_filepath("quickwit.wrongkey.yaml");
         let config_uri = Uri::try_new(&config_filepath).unwrap();
         let file = std::fs::read_to_string(&config_filepath).unwrap();
-        let parsing_error = QuickwitConfig::from_uri(&config_uri, file.as_bytes())
+        let parsing_error = QuickwitConfigBuilder::from_uri(&config_uri, file.as_bytes())
             .await
             .unwrap_err();
         assert!(format!("{parsing_error:?}")
@@ -667,7 +668,7 @@ mod tests {
     #[test]
     fn test_quickwit_config_default_values_minimal() {
         let minimal_config_yaml = "version: 0";
-        let config = serde_yaml::from_str::<QuickwitConfig>(minimal_config_yaml).unwrap();
+        let config = serde_yaml::from_str::<QuickwitConfigBuilder>(minimal_config_yaml).unwrap();
         let config = futures::executor::block_on(config.resolve()).unwrap();
         assert_eq!(config.version, 0);
         assert!(config.node_id.starts_with("node-"));
@@ -688,7 +689,7 @@ mod tests {
             node_id: 1
             metastore_uri: postgres://username:password@host:port/db
         "#;
-        let config = serde_yaml::from_str::<QuickwitConfig>(config_yaml).unwrap();
+        let config = serde_yaml::from_str::<QuickwitConfigBuilder>(config_yaml).unwrap();
         let config = futures::executor::block_on(config.resolve()).unwrap();
         assert_eq!(config.version, 0);
         assert_eq!(config.cluster_id, DEFAULT_CLUSTER_ID);
@@ -706,7 +707,7 @@ mod tests {
             metastore_uri: postgres://username:password@host:port/db
             data_dir: /opt/quickwit/data
         "#;
-        let config = serde_yaml::from_str::<QuickwitConfig>(config_yaml).unwrap();
+        let config = serde_yaml::from_str::<QuickwitConfigBuilder>(config_yaml).unwrap();
         let config = futures::executor::block_on(config.resolve()).unwrap();
         assert_eq!(config.version, 0);
         assert_eq!(
@@ -723,9 +724,10 @@ mod tests {
         let file_content = std::fs::read_to_string(&config_filepath).unwrap();
 
         let config_uri = Uri::try_new(&config_filepath).unwrap();
-        let mut quickwit_config = QuickwitConfig::from_uri(&config_uri, file_content.as_bytes())
-            .await
-            .unwrap();
+        let mut quickwit_config =
+            QuickwitConfigBuilder::from_uri(&config_uri, file_content.as_bytes())
+                .await
+                .unwrap();
         quickwit_config.data_dir_path = env::current_dir().unwrap();
         assert!(quickwit_config.validate().is_ok());
     }
@@ -733,7 +735,7 @@ mod tests {
     #[tokio::test]
     async fn test_peer_socket_addrs() {
         {
-            let quickwit_config = QuickwitConfig {
+            let quickwit_config = QuickwitConfigBuilder {
                 rest_listen_port: 1789,
                 ..Default::default()
             }
@@ -743,7 +745,7 @@ mod tests {
             assert!(quickwit_config.peer_seed_addrs().await.unwrap().is_empty());
         }
         {
-            let quickwit_config = QuickwitConfig {
+            let quickwit_config = QuickwitConfigBuilder {
                 rest_listen_port: 1789,
                 peer_seeds: vec!["unresolvable-host".to_string()],
                 ..Default::default()
@@ -754,7 +756,7 @@ mod tests {
             assert!(quickwit_config.peer_seed_addrs().await.is_err());
         }
         {
-            let quickwit_config = QuickwitConfig {
+            let quickwit_config = QuickwitConfigBuilder {
                 rest_listen_port: 1789,
                 peer_seeds: vec![
                     "unresolvable-host".to_string(),
@@ -783,7 +785,7 @@ mod tests {
     #[tokio::test]
     async fn test_socket_addr_ports() {
         {
-            let quickwit_config = QuickwitConfig {
+            let quickwit_config = QuickwitConfigBuilder {
                 listen_address: Ipv4Addr::LOCALHOST.to_string(),
                 ..Default::default()
             }
@@ -804,7 +806,7 @@ mod tests {
             );
         }
         {
-            let quickwit_config = QuickwitConfig {
+            let quickwit_config = QuickwitConfigBuilder {
                 listen_address: Ipv4Addr::LOCALHOST.to_string(),
                 rest_listen_port: 1789,
                 ..Default::default()
@@ -826,7 +828,7 @@ mod tests {
             );
         }
         {
-            let quickwit_config = QuickwitConfig {
+            let quickwit_config = QuickwitConfigBuilder {
                 listen_address: Ipv4Addr::LOCALHOST.to_string(),
                 rest_listen_port: 1789,
                 gossip_listen_port: Some(1889),
@@ -856,7 +858,7 @@ mod tests {
         let config_filepath = get_config_filepath("quickwit.yaml");
         let config_uri = Uri::try_new(&config_filepath).unwrap();
         let file = std::fs::read_to_string(&config_filepath).unwrap();
-        let config = QuickwitConfig::load(&config_uri, file.as_bytes(), None)
+        let config = QuickwitConfigBuilder::load(&config_uri, file.as_bytes(), None)
             .await
             .unwrap_err();
         assert!(config.to_string().contains("Data dir"));
@@ -870,7 +872,7 @@ mod tests {
             node_id: 1
             metastore_uri: ''
         "#;
-            let deserialized = serde_yaml::from_str::<QuickwitConfig>(config_yaml).unwrap();
+            let deserialized = serde_yaml::from_str::<QuickwitConfigBuilder>(config_yaml).unwrap();
             futures::executor::block_on(deserialized.resolve()).unwrap_err();
         }
         {
@@ -880,7 +882,7 @@ mod tests {
             metastore_uri: postgres://username:password@host:port/db
             default_index_root_uri: ''
         "#;
-            let deserialized = serde_yaml::from_str::<QuickwitConfig>(config_yaml).unwrap();
+            let deserialized = serde_yaml::from_str::<QuickwitConfigBuilder>(config_yaml).unwrap();
             futures::executor::block_on(deserialized.resolve()).unwrap_err();
         }
     }

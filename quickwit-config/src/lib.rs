@@ -26,7 +26,7 @@ mod index_config;
 mod source_config;
 
 pub use config::{
-    get_searcher_config_instance, IndexerConfig, QuickwitConfig, QuickwitConfigObject,
+    get_searcher_config_instance, IndexerConfig, QuickwitConfig, QuickwitConfigBuilder,
     SearcherConfig, DEFAULT_QW_CONFIG_PATH, SEARCHER_CONFIG_INSTANCE,
 };
 pub use index_config::{

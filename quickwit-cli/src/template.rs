@@ -22,24 +22,25 @@ use std::collections::HashMap;
 use anyhow::{bail, Context, Result};
 use new_string_template::template::Template;
 use once_cell::sync::Lazy;
-use quickwit_storage::OwnedBytes;
+use quickwit_common::uri::Uri;
 use regex::Regex;
-use tracing::{debug, warn};
+use tracing::debug;
 
 // Matches ${value} if value is in format of:
 // ENV_VAR or ENV_VAR:DEFAULT
 // Ignores whitespaces in curly braces
-static TEMPLATE_ENV_VAR_CAPTURE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\$\{\s*([A-Za-z0-9_]+):?([\S]+)?\s*}").unwrap());
+static TEMPLATE_ENV_VAR_CAPTURE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\$\{\s*([A-Za-z0-9_]+)(?:(?::\+)([\S]+))?\s*}").expect("Failed to compile regular expression. This should never happen! Please, report on https://github.com/quickwit-oss/quickwit/issues.")
+});
 
-pub fn render_config_file(contents: OwnedBytes) -> Result<String> {
-    let contents_as_string =
-        String::from_utf8(contents.to_vec()).context("Config is not in valid UTF8 form")?;
+pub fn render_config_file(contents: &[u8], uri: &Uri) -> Result<String> {
+    let contents_as_string = String::from_utf8(contents.to_vec())
+        .with_context(|| format!("Config file `{uri}` contains invalid UTF-8 characters."))?;
     let template = Template::new(&contents_as_string).with_regex(&TEMPLATE_ENV_VAR_CAPTURE);
     let mut data = HashMap::new();
 
     for captured in TEMPLATE_ENV_VAR_CAPTURE.captures_iter(&contents_as_string) {
-        let env_var_name = captured.get(1).unwrap().as_str(); // Captures always have one match
+        let env_var_name = captured.get(1).unwrap().as_str(); // Captures always have at least one match
         let subst_val = {
             if let Ok(env_var_value) = std::env::var(env_var_name) {
                 debug!(
@@ -47,25 +48,21 @@ pub fn render_config_file(contents: OwnedBytes) -> Result<String> {
                     env_var_value, "Found ENV_VAR: {} with value: {}", env_var_name, env_var_value
                 );
                 env_var_value
-            } else {
-                warn!(
+            } else if let Some(default_val) = captured.get(2) {
+                let default_val = default_val.as_str();
+                debug!(
                     env_var_name,
-                    "Unable to get ENV_VAR specified: {} ", env_var_name
+                    default_val,
+                    "Unable to get ENV_VAR specified: {}, Using default value instead: {}",
+                    env_var_name,
+                    default_val
                 );
-
-                if let Some(default_val) = captured.get(2) {
-                    let default_val = default_val.as_str();
-                    debug!(
-                        default_val,
-                        "Using default value specified: {}", default_val
-                    );
-                    default_val.to_string()
-                } else {
-                    bail!(
-                        "Couldn't find ENV_VAR: {env_var_name} and the default value for the \
-                         given template"
-                    );
-                }
+                default_val.to_string()
+            } else {
+                bail!(
+                    "Couldn't find ENV_VAR: {env_var_name} and the default value for the given \
+                     template"
+                );
             }
         };
         data.insert(env_var_name, subst_val);
@@ -73,7 +70,7 @@ pub fn render_config_file(contents: OwnedBytes) -> Result<String> {
 
     let rendered = template
         .render(&data)
-        .context("Failed to compile the template config")?;
+        .with_context(|| format!("Failed to render templated config file `{uri}`."))?;
     Ok(rendered)
 }
 
@@ -81,81 +78,76 @@ pub fn render_config_file(contents: OwnedBytes) -> Result<String> {
 mod test {
     use std::env;
 
-    use quickwit_storage::OwnedBytes;
+    use once_cell::sync::Lazy;
+    use quickwit_common::uri::Uri;
 
     use super::render_config_file;
 
+    static TEST_URI: Lazy<Uri> = Lazy::new(|| Uri::new("file://config.yaml".to_string()));
+
     #[test]
     fn test_template_render() {
-        let mock_config = OwnedBytes::new(
-            b"metastore_uri: ${TEST_TEMPLATE_RENDER_ENV_VAR_PLEASE_DONT_NOTICE}".as_slice(),
-        );
+        let mock_config = b"metastore_uri: ${TEST_TEMPLATE_RENDER_ENV_VAR_PLEASE_DONT_NOTICE}";
         env::set_var(
             "TEST_TEMPLATE_RENDER_ENV_VAR_PLEASE_DONT_NOTICE",
             "s3://test-bucket/metastore",
         );
-        let rendered = render_config_file(mock_config).unwrap();
+        let rendered = render_config_file(mock_config, &TEST_URI).unwrap();
         std::env::remove_var("TEST_TEMPLATE_RENDER_ENV_VAR_PLEASE_DONT_NOTICE");
         assert_eq!(rendered, "metastore_uri: s3://test-bucket/metastore");
     }
 
     #[test]
     fn test_template_render_whitespaces() {
-        let mock_config = OwnedBytes::new(
-            b"metastore_uri: ${TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST}".as_slice(),
-        );
-        let mock_config_trailing = OwnedBytes::new(
-            b"metastore_uri: ${TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST  }".as_slice(),
-        );
-        let mock_config_first = OwnedBytes::new(
-            b"metastore_uri: ${   TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST}".as_slice(),
-        );
-        let mock_config_mixed = OwnedBytes::new(
-            b"metastore_uri: ${  TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST    }".as_slice(),
-        );
         env::set_var(
             "TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST",
             "s3://test-bucket/metastore",
         );
-        let rendered = render_config_file(mock_config).unwrap();
-        let rendered_trailing = render_config_file(mock_config_trailing).unwrap();
-        let rendered_first = render_config_file(mock_config_first).unwrap();
-        let rendered_mixed = render_config_file(mock_config_mixed).unwrap();
-        std::env::remove_var("TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST");
-        assert_eq!(rendered, "metastore_uri: s3://test-bucket/metastore");
-        assert_eq!(
-            rendered_trailing,
-            "metastore_uri: s3://test-bucket/metastore"
-        );
-        assert_eq!(rendered_first, "metastore_uri: s3://test-bucket/metastore");
-        assert_eq!(rendered_mixed, "metastore_uri: s3://test-bucket/metastore");
+
+        {
+            let mock_config = b"metastore_uri: ${TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST}";
+            let rendered = render_config_file(mock_config, &TEST_URI).unwrap();
+            assert_eq!(rendered, "metastore_uri: s3://test-bucket/metastore");
+        }
+        {
+            let mock_config = b"metastore_uri: ${TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST  }";
+            let rendered = render_config_file(mock_config, &TEST_URI).unwrap();
+            assert_eq!(rendered, "metastore_uri: s3://test-bucket/metastore");
+        }
+        {
+            let mock_config = b"metastore_uri: ${   TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST}";
+            let rendered = render_config_file(mock_config, &TEST_URI).unwrap();
+            assert_eq!(rendered, "metastore_uri: s3://test-bucket/metastore");
+        }
+        {
+            let mock_config = b"metastore_uri: ${  TEST_TEMPLATE_RENDER_WHITESPACE_QW_TEST    }";
+            let rendered = render_config_file(mock_config, &TEST_URI).unwrap();
+            assert_eq!(rendered, "metastore_uri: s3://test-bucket/metastore");
+        }
     }
 
     #[test]
     fn test_template_render_default_value() {
-        let mock_config = OwnedBytes::new(
-            b"metastore_uri: ${QW_NO_ENV_WITH_THIS_NAME:s3://test-bucket/metastore}".as_slice(),
-        );
-        let rendered = render_config_file(mock_config).unwrap();
+        let mock_config = b"metastore_uri: ${QW_NO_ENV_WITH_THIS_NAME:+s3://test-bucket/metastore}";
+        let rendered = render_config_file(mock_config, &TEST_URI).unwrap();
         assert_eq!(rendered, "metastore_uri: s3://test-bucket/metastore");
     }
 
     #[test]
     fn test_template_render_should_panic() {
-        let mock_config = OwnedBytes::new(b"metastore_uri: ${QW_NO_ENV_WITH_THIS_NAME}".as_slice());
-        render_config_file(mock_config).unwrap_err();
+        let mock_config = b"metastore_uri: ${QW_NO_ENV_WITH_THIS_NAME}";
+        render_config_file(mock_config, &TEST_URI).unwrap_err();
     }
 
     #[test]
     fn test_template_render_with_default_use_env() {
-        let mock_config = OwnedBytes::new(
-            b"metastore_uri: ${TEST_TEMPLATE_RENDER_ENV_VAR_DEFAULT_USE_ENV:s3://test-bucket/wrongbucket}".as_slice(),
-        );
+        let mock_config =
+            b"metastore_uri: ${TEST_TEMPLATE_RENDER_ENV_VAR_DEFAULT_USE_ENV:+s3://test-bucket/wrongbucket}";
         env::set_var(
             "TEST_TEMPLATE_RENDER_ENV_VAR_DEFAULT_USE_ENV",
             "s3://test-bucket/metastore",
         );
-        let rendered = render_config_file(mock_config).unwrap();
+        let rendered = render_config_file(mock_config, &TEST_URI).unwrap();
         std::env::remove_var("TEST_TEMPLATE_RENDER_ENV_VAR_DEFAULT_USE_ENV");
         assert_eq!(rendered, "metastore_uri: s3://test-bucket/metastore");
         assert_ne!(rendered, "metastore_uri: s3://test-bucket/wrongbucket");

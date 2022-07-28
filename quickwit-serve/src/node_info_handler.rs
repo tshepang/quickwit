@@ -20,14 +20,14 @@
 use std::sync::Arc;
 
 use quickwit_common::uri::Uri;
-use quickwit_config::QuickwitConfigObject;
+use quickwit_config::QuickwitConfig;
 use warp::{Filter, Rejection};
 
 use crate::{with_arg, QuickwitBuildInfo};
 
 pub fn node_info_handler(
     build_info: Arc<QuickwitBuildInfo>,
-    config: Arc<QuickwitConfigObject>,
+    config: Arc<QuickwitConfig>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = Rejection> + Clone {
     node_version_handler(build_info).or(node_config_handler(config))
 }
@@ -46,7 +46,7 @@ async fn get_version(build_info: Arc<QuickwitBuildInfo>) -> Result<impl warp::Re
 }
 
 fn node_config_handler(
-    config: Arc<QuickwitConfigObject>,
+    config: Arc<QuickwitConfig>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = Rejection> + Clone {
     warp::path("config")
         .and(warp::path::end())
@@ -54,7 +54,7 @@ fn node_config_handler(
         .and_then(get_config)
 }
 
-async fn get_config(config: Arc<QuickwitConfigObject>) -> Result<impl warp::Reply, Rejection> {
+async fn get_config(config: Arc<QuickwitConfig>) -> Result<impl warp::Reply, Rejection> {
     // We need to hide sensitive information from metastore URI.
     let mut config_to_serialize = (*config).clone();
     let redacted_uri = Uri::new(
@@ -70,7 +70,7 @@ async fn get_config(config: Arc<QuickwitConfigObject>) -> Result<impl warp::Repl
 #[cfg(test)]
 mod tests {
     use assert_json_diff::assert_json_include;
-    use quickwit_config::QuickwitConfig;
+    use quickwit_config::QuickwitConfigBuilder;
 
     use super::*;
     use crate::recover_fn;
@@ -85,7 +85,7 @@ mod tests {
             commit_date: "commit_date",
             version: "version",
         };
-        let mut config = QuickwitConfig::default().resolve().await?;
+        let mut config = QuickwitConfigBuilder::default().resolve().await?;
         config.metastore_uri = Uri::new("postgresql://username:password@db".to_string());
         let handler =
             super::node_info_handler(Arc::new(build_info.clone()), Arc::new(config.clone()))
