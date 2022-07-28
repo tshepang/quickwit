@@ -30,7 +30,7 @@ use tracing::debug;
 // ENV_VAR or ENV_VAR:DEFAULT
 // Ignores whitespaces in curly braces
 static TEMPLATE_ENV_VAR_CAPTURE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\$\{\s*([A-Za-z0-9_]+)(?:(?::\+)([\S]+))?\s*}").expect("Failed to compile regular expression. This should never happen! Please, report on https://github.com/quickwit-oss/quickwit/issues.")
+    Regex::new(r"\$\{\s*([A-Za-z0-9_]+)(?:(?::\-)([\S]+))?\s*}").expect("Failed to compile regular expression. This should never happen! Please, report on https://github.com/quickwit-oss/quickwit/issues.")
 });
 
 pub fn render_config_file(contents: &[u8], uri: &Uri) -> Result<String> {
@@ -128,7 +128,7 @@ mod test {
 
     #[test]
     fn test_template_render_default_value() {
-        let mock_config = b"metastore_uri: ${QW_NO_ENV_WITH_THIS_NAME:+s3://test-bucket/metastore}";
+        let mock_config = b"metastore_uri: ${QW_NO_ENV_WITH_THIS_NAME:-s3://test-bucket/metastore}";
         let rendered = render_config_file(mock_config, &TEST_URI).unwrap();
         assert_eq!(rendered, "metastore_uri: s3://test-bucket/metastore");
     }
@@ -142,7 +142,7 @@ mod test {
     #[test]
     fn test_template_render_with_default_use_env() {
         let mock_config =
-            b"metastore_uri: ${TEST_TEMPLATE_RENDER_ENV_VAR_DEFAULT_USE_ENV:+s3://test-bucket/wrongbucket}";
+            b"metastore_uri: ${TEST_TEMPLATE_RENDER_ENV_VAR_DEFAULT_USE_ENV:-s3://test-bucket/wrongbucket}";
         env::set_var(
             "TEST_TEMPLATE_RENDER_ENV_VAR_DEFAULT_USE_ENV",
             "s3://test-bucket/metastore",
