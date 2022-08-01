@@ -128,7 +128,11 @@ pub type SourceContext = ActorContext<SourceActor>;
 #[async_trait]
 pub trait Source: Send + Sync + 'static {
     /// This method will be called before any calls to `emit_batches`.
-    async fn initialize(&mut self, _ctx: &SourceContext) -> Result<(), ActorExitStatus> {
+    async fn initialize(
+        &mut self,
+        _indexer_mailbox: &Mailbox<Indexer>,
+        _ctx: &SourceContext,
+    ) -> Result<(), ActorExitStatus> {
         Ok(())
     }
 
@@ -141,7 +145,7 @@ pub trait Source: Send + Sync + 'static {
     /// should wait before pooling gain.
     async fn emit_batches(
         &mut self,
-        batch_sink: &Mailbox<Indexer>,
+        indexer_mailbox: &Mailbox<Indexer>,
         ctx: &SourceContext,
     ) -> Result<Duration, ActorExitStatus>;
 
@@ -191,7 +195,7 @@ pub trait Source: Send + Sync + 'static {
 /// It mostly takes care of running a loop calling `emit_batches(...)`.
 pub struct SourceActor {
     pub source: Box<dyn Source>,
-    pub batch_sink: Mailbox<Indexer>,
+    pub indexer_mailbox: Mailbox<Indexer>,
 }
 
 #[derive(Debug)]
@@ -214,7 +218,7 @@ impl Actor for SourceActor {
     }
 
     async fn initialize(&mut self, ctx: &SourceContext) -> Result<(), ActorExitStatus> {
-        self.source.initialize(ctx).await?;
+        self.source.initialize(&self.indexer_mailbox, ctx).await?;
         self.handle(Loop, ctx).await?;
         Ok(())
     }
@@ -234,7 +238,7 @@ impl Handler<Loop> for SourceActor {
     type Reply = ();
 
     async fn handle(&mut self, _message: Loop, ctx: &SourceContext) -> Result<(), ActorExitStatus> {
-        let wait_for = self.source.emit_batches(&self.batch_sink, ctx).await?;
+        let wait_for = self.source.emit_batches(&self.indexer_mailbox, ctx).await?;
         if wait_for.is_zero() {
             ctx.send_self_message(Loop).await?;
             return Ok(());

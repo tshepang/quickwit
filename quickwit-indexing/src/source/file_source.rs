@@ -206,7 +206,7 @@ mod tests {
         .await?;
         let file_source_actor = SourceActor {
             source: Box::new(file_source),
-            batch_sink: mailbox,
+            indexer_mailbox: mailbox,
         };
         let (_file_source_mailbox, file_source_handle) =
             universe.spawn_actor(file_source_actor).spawn();
@@ -267,7 +267,7 @@ mod tests {
         .await?;
         let file_source_actor = SourceActor {
             source: Box::new(source),
-            batch_sink: mailbox,
+            indexer_mailbox: mailbox,
         };
         let (_file_source_mailbox, file_source_handle) =
             universe.spawn_actor(file_source_actor).spawn();
@@ -350,7 +350,7 @@ mod tests {
         .await?;
         let file_source_actor = SourceActor {
             source: Box::new(source),
-            batch_sink: mailbox,
+            indexer_mailbox: mailbox,
         };
         let (_file_source_mailbox, file_source_handle) =
             universe.spawn_actor(file_source_actor).spawn();

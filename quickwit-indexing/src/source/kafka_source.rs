@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,11 +39,11 @@ use rdkafka::message::BorrowedMessage;
 use rdkafka::util::Timeout;
 use rdkafka::{ClientContext, Message, Offset, TopicPartitionList};
 use serde_json::json;
-use tokio::runtime::Handle;
-use tokio::sync::mpsc;
+use tokio::sync::Mutex;
 use tokio::task::spawn_blocking;
 use tokio::time;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
+use {flume, oneshot};
 
 use crate::actors::Indexer;
 use crate::models::RawDocBatch;
@@ -62,6 +63,17 @@ const TARGET_BATCH_NUM_BYTES: u64 = 5_000_000;
 /// Factory for instantiating a `KafkaSource`.
 pub struct KafkaSourceFactory;
 
+#[derive(Clone, Debug, Default)]
+struct SynchronizationBarrierToken {
+    inner: Arc<Mutex<AtomicUsize>>,
+}
+
+impl SynchronizationBarrierToken {
+    async fn inc(&mut self) {
+        self.inner.lock().await.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
 #[async_trait]
 impl TypedSourceFactory for KafkaSourceFactory {
     type Source = KafkaSource;
@@ -77,12 +89,13 @@ impl TypedSourceFactory for KafkaSourceFactory {
 }
 
 enum RebalanceEvent {
-    Starting,
-    Assignments(HashMap<i32, PartitionId>),
+    Pre { condvar_tx: oneshot::Sender<()> },
+    Post { condvar_tx: oneshot::Sender<()> },
 }
+
 struct RdKafkaContext {
     ctx: Arc<SourceExecutionContext>,
-    rebalance_events: mpsc::Sender<RebalanceEvent>,
+    rebalance_events: flume::Sender<RebalanceEvent>,
 }
 
 impl ClientContext for RdKafkaContext {}
@@ -90,106 +103,20 @@ impl ClientContext for RdKafkaContext {}
 impl ConsumerContext for RdKafkaContext {
     fn pre_rebalance(&self, rebalance: &Rebalance) {
         info!("Pre rebalance {:?}", rebalance);
-        let source_id = self.ctx.config.source_id.clone();
-
-        let mut assignments = HashMap::new();
-
-        // TODO: need to also handle Rebalance::Revoke
-        if let &Rebalance::Assign(tpl) = rebalance {
-            // The rebalance API is not defined to be async so this attempts a work around
-            // by explicitly blocking the thread handling the rebalance callback until the
-            // database action is complete
-            let handle = Handle::current();
-            let _guard = handle.enter();
-            let result = futures::executor::block_on(async {
-                // This is intended to invalidate the in progress split. Since partitions may be
-                // moving away, any in progress state will be invalid and a new split would need
-                // to be started from the most recently committed offsets.
-                // TODO: this can throw an error
-                let _result = self.rebalance_events.send(RebalanceEvent::Starting).await;
-
-                self.ctx.metastore.index_metadata(&self.ctx.index_id).await
-            });
-
-            let index_metadata = match result {
-                Ok(index_metadata) => index_metadata,
-                Err(_err) => {
-                    // TODO: a panic here may not be the right thing
-                    panic!(
-                        "No Index metadata found for {}: this should never happen.",
-                        source_id
-                    );
-                }
-            };
-
-            let source_checkpoint = index_metadata.checkpoint.source_checkpoint(&source_id);
-
-            let checkpoint = match source_checkpoint {
-                Some(checkpoint) => checkpoint.clone(),
-                None => {
-                    warn!("Source checkpoint doesn't exist for {}", source_id);
-                    SourceCheckpoint::default()
-                }
-            };
-
-            // elements() will give you the list of partitions being assigned
-            let partitions = tpl.elements();
-            for entry in partitions.iter() {
-                // Need to use find_partition to get a mutable reference.
-                let mut partition = tpl
-                    .find_partition(entry.topic(), entry.partition())
-                    .expect("Consumer rebalance unknown partition");
-
-                let partition_id = PartitionId::from(entry.partition() as i64);
-
-                assignments.insert(entry.partition(), partition_id.clone());
-
-                // Offsets must be tracked per partition
-                let offset = match checkpoint.position_for_partition(&partition_id) {
-                    Some(position) => match position {
-                        Position::Offset(offset_string) => {
-                            let numeric_offset =
-                                offset_string.parse::<i64>().expect("Invalid stored offset");
-
-                            if numeric_offset < 0 {
-                                Offset::Beginning
-                            } else {
-                                Offset::Offset(numeric_offset + 1)
-                            }
-                        }
-                        Position::Beginning => Offset::Beginning,
-                    },
-                    None => Offset::Beginning,
-                };
-
-                debug!(
-                    "Setting offsets for {} {}, {}, {:?}",
-                    source_id,
-                    entry.topic(),
-                    entry.partition(),
-                    offset
-                );
-
-                // set_offset will move the in memory offset on the client
-                // If the offset is invalid at this point the standard consumer group offset reset
-                // mechanism will apply to handle it.
-                partition
-                    .set_offset(offset)
-                    .expect("Failure setting offset");
-            }
-        }
-
-        let handle = Handle::current();
-        let _guard = handle.enter();
-        let _result = futures::executor::block_on(
+        if let Rebalance::Assign(_) = rebalance {
+            let (condvar_tx, condvar_rx) = oneshot::channel();
             self.rebalance_events
-                .send(RebalanceEvent::Assignments(assignments)),
-        );
-        // TODO: handle the sending error.
+                .send(RebalanceEvent::Pre { condvar_tx });
+            condvar_rx.recv();
+        }
     }
 
     fn post_rebalance(&self, rebalance: &Rebalance) {
         info!("Post rebalance {:?}", rebalance);
+        let (condvar_tx, condvar_rx) = oneshot::channel();
+        self.rebalance_events
+            .send(RebalanceEvent::Post { condvar_tx });
+        condvar_rx.recv();
     }
 
     fn commit_callback(&self, result: KafkaResult<()>, _offsets: &TopicPartitionList) {
@@ -253,7 +180,8 @@ pub struct KafkaSource {
     topic: String,
     consumer: Arc<RdKafkaConsumer>,
     state: KafkaSourceState,
-    rebalance_events: mpsc::Receiver<RebalanceEvent>,
+    barrier_token: SynchronizationBarrierToken,
+    rebalance_events: flume::Receiver<RebalanceEvent>,
     backfill_mode_enabled: bool,
 }
 
@@ -277,9 +205,9 @@ impl KafkaSource {
         let topic = params.topic.clone();
         let backfill_mode_enabled = params.enable_backfill_mode;
 
-        let (rebalance_sender, rebalance_receiver) = mpsc::channel(32);
-
+        let (rebalance_sender, rebalance_receiver) = flume::bounded(32);
         let consumer = create_consumer(ctx.clone(), params, rebalance_sender)?;
+        let barrier_token = SynchronizationBarrierToken::default();
 
         info!(
             topic = %topic,
@@ -287,7 +215,7 @@ impl KafkaSource {
         );
         consumer
             .subscribe(&[topic.as_str()])
-            .context("Failed to resume from checkpoint.")?;
+            .with_context(|| format!("Failed to subscribe to topic `{topic}`."))?;
 
         let state = KafkaSourceState {
             ..Default::default()
@@ -297,17 +225,37 @@ impl KafkaSource {
             topic,
             consumer,
             state,
+            barrier_token,
             rebalance_events: rebalance_receiver,
             backfill_mode_enabled,
         })
     }
+
+    async fn process_pre_rebalance(&mut self) {
+        self.barrier_token.inc().await
+    }
+
+    async fn process_post_rebalance(&mut self) {}
 }
+
+#[derive(Debug)]
+pub(crate) struct AssignBarrierToken(SynchronizationBarrierToken);
 
 #[async_trait]
 impl Source for KafkaSource {
+    async fn initialize(
+        &mut self,
+        indexer_mailbox: &Mailbox<Indexer>,
+        ctx: &SourceContext,
+    ) -> Result<(), ActorExitStatus> {
+        let message = AssignBarrierToken(self.barrier_token.clone());
+        ctx.send_message(indexer_mailbox, message).await?;
+        Ok(())
+    }
+
     async fn emit_batches(
         &mut self,
-        batch_sink: &Mailbox<Indexer>,
+        indexer_mailbox: &Mailbox<Indexer>,
         ctx: &SourceContext,
     ) -> Result<Duration, ActorExitStatus> {
         let mut batch_num_bytes = 0;
@@ -319,22 +267,20 @@ impl Source for KafkaSource {
 
         loop {
             tokio::select! {
-                message = self.rebalance_events.recv() => {
-                    match message {
-                        Some(event) => {
-                            match event {
-                                RebalanceEvent::Starting => {
-                                    // TODO: on a rebalance we need to stop processing and invalidate
-                                    // the in progress split.
-                                },
-                                RebalanceEvent::Assignments(assignments) => {
-                                    debug!("Received partition assignments {:?}", assignments);
-                                    self.state.num_active_partitions = NumActivePartitions::Some(assignments.len());
-                                    self.state.assigned_partition_ids = assignments;
-                                }
-                            }
+                message_res = self.rebalance_events.recv_async() => {
+                    match message_res {
+                        Ok(RebalanceEvent::Pre { condvar_tx }) => {
+                            self.process_pre_rebalance().await;
+                            condvar_tx.send(());
                         },
-                        None => {}
+                        Ok(RebalanceEvent::Post { condvar_tx }) => {
+                        self.process_post_rebalance().await;
+                            condvar_tx.send(());
+                        }
+                        Err(error) => {
+                            error!(error=?error, "Kafka consumer context channel was dropped.");
+                            return Err(ActorExitStatus::Failure(Arc::new(anyhow::anyhow!(error))));
+                        }
                     }
                 },
                 message_res = self.consumer.recv() => {
@@ -401,11 +347,11 @@ impl Source for KafkaSource {
                 docs,
                 checkpoint_delta,
             };
-            ctx.send_message(batch_sink, batch).await?;
+            ctx.send_message(indexer_mailbox, batch).await?;
         }
         if self.backfill_mode_enabled && self.state.num_active_partitions.is_zero() {
             info!(topic = %self.topic, "Reached end of topic.");
-            ctx.send_exit_with_success(batch_sink).await?;
+            ctx.send_exit_with_success(indexer_mailbox).await?;
             return Err(ActorExitStatus::Success);
         }
         debug!("batch complete, waiting for next iteration");
@@ -489,7 +435,7 @@ pub(super) async fn check_connectivity(params: KafkaSourceParams) -> anyhow::Res
 fn create_consumer(
     ctx: Arc<SourceExecutionContext>,
     params: KafkaSourceParams,
-    rebalance_sender: mpsc::Sender<RebalanceEvent>,
+    rebalance_sender: flume::Sender<RebalanceEvent>,
 ) -> anyhow::Result<Arc<RdKafkaConsumer>> {
     let mut client_config = parse_client_params(params.client_params)?;
 
@@ -780,7 +726,7 @@ mod kafka_broker_tests {
                 .await?;
             let actor = SourceActor {
                 source,
-                batch_sink: sink.clone(),
+                indexer_mailbox: sink.clone(),
             };
             let (_mailbox, handle) = universe.spawn_actor(actor).spawn();
             let (exit_status, exit_state) = handle.join().await;
@@ -844,7 +790,7 @@ mod kafka_broker_tests {
                 .await?;
             let actor = SourceActor {
                 source,
-                batch_sink: sink.clone(),
+                indexer_mailbox: sink.clone(),
             };
             let (_mailbox, handle) = universe.spawn_actor(actor).spawn();
             let (exit_status, state) = handle.join().await;
@@ -925,7 +871,7 @@ mod kafka_broker_tests {
                 .await?;
             let actor = SourceActor {
                 source,
-                batch_sink: sink.clone(),
+                indexer_mailbox: sink.clone(),
             };
             let (_mailbox, handle) = universe.spawn_actor(actor).spawn();
             let (exit_status, exit_state) = handle.join().await;
