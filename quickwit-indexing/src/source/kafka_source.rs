@@ -88,9 +88,6 @@ enum RebalanceEvent {
 }
 
 struct RdKafkaContext {
-    // TODO: remove.
-    // @guilload: Somehow I hit a weird compiler bug when removing this attribute.
-    _ctx: Arc<SourceExecutionContext>,
     topic: String,
     rebalance_events: flume::Sender<RebalanceEvent>,
 }
@@ -226,7 +223,7 @@ impl KafkaSource {
         let backfill_mode_enabled = params.enable_backfill_mode;
 
         let (rebalance_sender, rebalance_receiver) = flume::bounded(32);
-        let consumer = create_consumer(ctx.clone(), params, rebalance_sender)?;
+        let consumer = create_consumer(&ctx.config.source_id, params, rebalance_sender)?;
 
         info!(
             index_id=%ctx.index_id,
@@ -499,14 +496,14 @@ fn compute_next_offset(source_checkpoint: &SourceCheckpoint, partition: i32) -> 
 
 /// Creates a new `KafkaSourceConsumer`.
 fn create_consumer(
-    ctx: Arc<SourceExecutionContext>,
+    source_id: &str,
     params: KafkaSourceParams,
     rebalance_sender: flume::Sender<RebalanceEvent>,
 ) -> anyhow::Result<Arc<RdKafkaConsumer>> {
     let mut client_config = parse_client_params(params.client_params)?;
 
     // Group ID is limited to 255 characters.
-    let mut group_id = format!("quickwit-{}", ctx.config.source_id);
+    let mut group_id = format!("quickwit-{}", source_id);
     group_id.truncate(255);
     debug!("Initializing consumer for group_id {}", group_id);
 
@@ -520,7 +517,6 @@ fn create_consumer(
         .set("group.id", group_id)
         .set_log_level(log_level)
         .create_with_context(RdKafkaContext {
-            _ctx: ctx,
             topic: params.topic,
             rebalance_events: rebalance_sender,
         })
