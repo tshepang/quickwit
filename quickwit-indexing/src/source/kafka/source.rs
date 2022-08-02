@@ -32,22 +32,22 @@ use quickwit_metastore::checkpoint::{
 };
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::stream_consumer::StreamConsumer;
-use rdkafka::consumer::{
-    BaseConsumer, Consumer, ConsumerContext, DefaultConsumerContext, Rebalance,
-};
-use rdkafka::error::{KafkaError, KafkaResult};
+use rdkafka::consumer::{BaseConsumer, Consumer, DefaultConsumerContext};
+use rdkafka::error::KafkaError;
 use rdkafka::message::BorrowedMessage;
 use rdkafka::util::Timeout;
-use rdkafka::{ClientContext, Message, Offset, TopicPartitionList};
+use rdkafka::{Message, Offset};
 use serde_json::json;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::spawn_blocking;
 use tokio::time;
 use tracing::{debug, error, info, warn};
-use {flume, oneshot};
 
+use super::consumer_context::KafkaSourceConsumerContext;
 use crate::actors::Indexer;
 use crate::models::RawDocBatch;
-use crate::source::{Source, SourceContext, SourceExecutionContext, TypedSourceFactory};
+use crate::source::kafka::consumer_context::RebalanceEvent;
+use crate::source::{Source, SourceContext, SourceExecutionContext};
 
 /// We try to emit chewable batches for the indexer.
 /// One batch = one message to the indexer actor.
@@ -59,88 +59,6 @@ use crate::source::{Source, SourceContext, SourceExecutionContext, TypedSourceFa
 ///
 /// 5MB seems like a good one size fits all value.
 const TARGET_BATCH_NUM_BYTES: u64 = 5_000_000;
-
-/// Factory for instantiating a `KafkaSource`.
-pub struct KafkaSourceFactory;
-
-#[async_trait]
-impl TypedSourceFactory for KafkaSourceFactory {
-    type Source = KafkaSource;
-    type Params = KafkaSourceParams;
-
-    async fn typed_create_source(
-        ctx: Arc<SourceExecutionContext>,
-        params: KafkaSourceParams,
-        checkpoint: SourceCheckpoint,
-    ) -> anyhow::Result<Self::Source> {
-        KafkaSource::try_new(ctx, params, checkpoint).await
-    }
-}
-
-enum RebalanceEvent {
-    Starting {
-        ack_tx: oneshot::Sender<()>,
-    },
-    Assignment {
-        assignment: Vec<i32>,
-        ack_tx: oneshot::Sender<Vec<(i32, Offset)>>,
-    },
-}
-
-struct RdKafkaContext {
-    topic: String,
-    rebalance_events: flume::Sender<RebalanceEvent>,
-}
-
-impl ClientContext for RdKafkaContext {}
-
-impl ConsumerContext for RdKafkaContext {
-    fn pre_rebalance(&self, rebalance: &Rebalance) {
-        info!("Pre rebalance {:?}", rebalance);
-        if let Rebalance::Assign(_) = rebalance {
-            let (ack_tx, ack_rx) = oneshot::channel();
-            self.rebalance_events
-                .send(RebalanceEvent::Starting { ack_tx })
-                .expect("Failed to send pre-rebalance event.");
-            ack_rx
-                .recv()
-                .expect("Failed to receive pre-rebalance event ack.");
-        }
-    }
-
-    fn post_rebalance(&self, rebalance: &Rebalance) {
-        info!("Post rebalance {:?}", rebalance);
-        if let Rebalance::Assign(tpl) = rebalance {
-            let assignment = tpl
-                .elements()
-                .iter()
-                .map(|tple| {
-                    assert_eq!(tple.topic(), self.topic);
-                    tple.partition()
-                })
-                .collect();
-            let (ack_tx, ack_rx) = oneshot::channel();
-            self.rebalance_events
-                .send(RebalanceEvent::Assignment { assignment, ack_tx })
-                .expect("Failed to send post-rebalance event.");
-            let next_offsets = ack_rx
-                .recv()
-                .expect("Failed to receive post-rebalance event ack.");
-            update_assignment(&self.topic, tpl, next_offsets);
-        }
-    }
-
-    fn commit_callback(&self, result: KafkaResult<()>, _offsets: &TopicPartitionList) {
-        info!("Committing offsets: {:?}", result);
-    }
-}
-
-fn update_assignment(topic: &str, tpl: &TopicPartitionList, next_offsets: Vec<(i32, Offset)>) {
-    for (partition, offset) in next_offsets {
-        let mut partition = tpl.find_partition(topic, partition).expect("Failed to find partition in assignment. This should never happen! Please, report on https://github.com/quickwit-oss/quickwit/issues.");
-        partition.set_offset(offset).expect("Failed to convert offset to librdkafka internal representation. This should never happen! Please, report on https://github.com/quickwit-oss/quickwit/issues.");
-    }
-}
 
 #[derive(Debug)]
 pub enum NumActivePartitions {
@@ -174,7 +92,7 @@ impl Default for NumActivePartitions {
     }
 }
 
-type RdKafkaConsumer = StreamConsumer<RdKafkaContext>;
+type KafkaSourceConsumer = StreamConsumer<KafkaSourceConsumerContext>;
 
 #[derive(Default)]
 pub struct KafkaSourceState {
@@ -196,9 +114,9 @@ pub struct KafkaSourceState {
 pub struct KafkaSource {
     ctx: Arc<SourceExecutionContext>,
     topic: String,
-    consumer: Arc<RdKafkaConsumer>,
+    consumer: Arc<KafkaSourceConsumer>,
     state: KafkaSourceState,
-    rebalance_events: flume::Receiver<RebalanceEvent>,
+    rebalance_events: mpsc::Receiver<RebalanceEvent>,
     backfill_mode_enabled: bool,
 }
 
@@ -222,7 +140,7 @@ impl KafkaSource {
         let topic = params.topic.clone();
         let backfill_mode_enabled = params.enable_backfill_mode;
 
-        let (rebalance_sender, rebalance_receiver) = flume::bounded(32);
+        let (rebalance_sender, rebalance_receiver) = mpsc::channel(32);
         let consumer = create_consumer(&ctx.config.source_id, params, rebalance_sender)?;
 
         info!(
@@ -319,13 +237,14 @@ impl Source for KafkaSource {
 
         loop {
             tokio::select! {
-                message_res = self.rebalance_events.recv_async() => {
+                message_res = self.rebalance_events.recv() => {
                     match message_res {
-                        Ok(RebalanceEvent::Starting { ack_tx }) => self.process_pre_rebalance(ack_tx).await?,
-                        Ok(RebalanceEvent::Assignment { assignment, ack_tx }) => self.process_post_rebalance(&assignment, ack_tx).await?,
-                        Err(error) => {
-                            error!(error=?error, index_id=%self.ctx.index_id, source_id=%self.ctx.config.source_id, "Consumer context was dropped.");
-                            return Err(ActorExitStatus::Failure(Arc::new(anyhow::anyhow!(error))));
+                        Some(RebalanceEvent::Starting { ack_tx }) => self.process_pre_rebalance(ack_tx).await?,
+                        Some(RebalanceEvent::Assignment { assignment, ack_tx }) => self.process_post_rebalance(&assignment, ack_tx).await?,
+                        None => {
+                            let error = anyhow::anyhow!("Consumer context was dropped.");
+                            error!(index_id=%self.ctx.index_id, source_id=%self.ctx.config.source_id, "Consumer context was dropped.");
+                            return Err(ActorExitStatus::Failure(Arc::new(error)));
                         }
                     }
                 },
@@ -450,7 +369,7 @@ fn previous_position_for_offset(offset: i64) -> Position {
 }
 
 /// Checks whether we can establish a connection to the Kafka broker.
-pub(super) async fn check_connectivity(params: KafkaSourceParams) -> anyhow::Result<()> {
+pub async fn check_connectivity(params: KafkaSourceParams) -> anyhow::Result<()> {
     let mut client_config = parse_client_params(params.client_params)?;
 
     let consumer: BaseConsumer<DefaultConsumerContext> = client_config
@@ -498,8 +417,8 @@ fn compute_next_offset(source_checkpoint: &SourceCheckpoint, partition: i32) -> 
 fn create_consumer(
     source_id: &str,
     params: KafkaSourceParams,
-    rebalance_sender: flume::Sender<RebalanceEvent>,
-) -> anyhow::Result<Arc<RdKafkaConsumer>> {
+    rebalance_sender: mpsc::Sender<RebalanceEvent>,
+) -> anyhow::Result<Arc<KafkaSourceConsumer>> {
     let mut client_config = parse_client_params(params.client_params)?;
 
     // Group ID is limited to 255 characters.
@@ -508,7 +427,7 @@ fn create_consumer(
     debug!("Initializing consumer for group_id {}", group_id);
 
     let log_level = parse_client_log_level(params.client_log_level)?;
-    let consumer: RdKafkaConsumer = client_config
+    let consumer: KafkaSourceConsumer = client_config
         .set("enable.auto.commit", "false") // We manage offsets ourselves: we always want to set this value to `false`.
         .set(
             "enable.partition.eof",
@@ -516,7 +435,7 @@ fn create_consumer(
         )
         .set("group.id", group_id)
         .set_log_level(log_level)
-        .create_with_context(RdKafkaContext {
+        .create_with_context(KafkaSourceConsumerContext {
             topic: params.topic,
             rebalance_events: rebalance_sender,
         })

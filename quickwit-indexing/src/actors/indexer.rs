@@ -165,7 +165,7 @@ impl IndexerState {
     async fn get_or_create_workbench<'a>(
         &'a self,
         indexing_workbench_opt: &'a mut Option<IndexingWorkbench>,
-        ctx: &ActorContext<Indexer>,
+        ctx: &'a ActorContext<Indexer>,
     ) -> anyhow::Result<&'a mut IndexingWorkbench> {
         if indexing_workbench_opt.is_none() {
             let indexing_workbench = self.create_workbench()?;

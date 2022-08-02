@@ -60,7 +60,7 @@
 mod file_source;
 mod ingest_api_source;
 #[cfg(feature = "kafka")]
-mod kafka_source;
+mod kafka;
 #[cfg(feature = "kinesis")]
 mod kinesis;
 mod source_factory;
@@ -75,9 +75,9 @@ use anyhow::bail;
 use async_trait::async_trait;
 pub use file_source::{FileSource, FileSourceFactory};
 #[cfg(feature = "kafka")]
-pub use kafka_source::{KafkaSource, KafkaSourceFactory};
+pub use kafka::{KafkaSource, KafkaSourceFactory};
 #[cfg(feature = "kinesis")]
-pub use kinesis::kinesis_source::{KinesisSource, KinesisSourceFactory};
+pub use kinesis::source::{KinesisSource, KinesisSourceFactory};
 use once_cell::sync::OnceCell;
 use quickwit_actors::{Actor, ActorContext, ActorExitStatus, Handler, Mailbox};
 use quickwit_common::runtimes::RuntimeType;
@@ -277,7 +277,7 @@ pub async fn check_source_connectivity(source_config: &SourceConfig) -> anyhow::
 
             #[cfg(feature = "kafka")]
             {
-                kafka_source::check_connectivity(params.clone()).await?;
+                kafka::check_connectivity(params.clone()).await?;
                 Ok(())
             }
         }

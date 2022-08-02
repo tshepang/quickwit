@@ -19,15 +19,15 @@
 
 mod api;
 mod helpers;
-pub mod kinesis_source;
 mod shard_consumer;
+pub mod source;
 
 use quickwit_aws::retry::RetryParams;
 use quickwit_config::KinesisSourceParams;
 
 use crate::source::kinesis::api::{get_records, get_shard_iterator, list_shards};
 use crate::source::kinesis::helpers::get_kinesis_client;
-use crate::source::kinesis::kinesis_source::get_region;
+use crate::source::kinesis::source::get_region;
 
 /// Checks whether we can establish a connection to the Kinesis service and read some records.
 pub(super) async fn check_connectivity(params: KinesisSourceParams) -> anyhow::Result<()> {
