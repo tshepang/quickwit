@@ -17,6 +17,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <http://www.gnu.org/licenses/>.
 
+use std::fmt::Debug;
+
 use anyhow::Context;
 use async_trait::async_trait;
 use quickwit_actors::{Actor, ActorContext, ActorExitStatus, Handler, Mailbox};
@@ -50,8 +52,14 @@ impl<A: Actor> Actor for Sequencer<A> {
     fn observable_state(&self) {}
 }
 
+#[derive(Debug)]
+pub enum SequencerCommand<T: Debug> {
+    Cancel,
+    Proceed(T),
+}
+
 #[async_trait]
-impl<A, M> Handler<oneshot::Receiver<M>> for Sequencer<A>
+impl<A, M> Handler<oneshot::Receiver<SequencerCommand<M>>> for Sequencer<A>
 where
     A: Actor,
     A: Handler<M>,
@@ -61,16 +69,18 @@ where
 
     async fn handle(
         &mut self,
-        message: oneshot::Receiver<M>,
+        message: oneshot::Receiver<SequencerCommand<M>>,
         ctx: &ActorContext<Self>,
     ) -> Result<(), ActorExitStatus> {
-        let msg = ctx
+        let command = ctx
             .protect_future(message)
             .await
-            .context("Message future failed.")?;
-        ctx.send_message(&self.mailbox, msg)
-            .await
-            .context("Failed to send message to publisher")?;
+            .context("Failed to receive command from uploader.")?;
+        if let SequencerCommand::Proceed(msg) = command {
+            ctx.send_message(&self.mailbox, msg)
+                .await
+                .context("Failed to send message to publisher.")?;
+        }
         Ok(())
     }
 }

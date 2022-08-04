@@ -37,9 +37,9 @@ use time::OffsetDateTime;
 use tokio::sync::{oneshot, Semaphore, SemaphorePermit};
 use tracing::{info, info_span, warn, Instrument, Span};
 
-use crate::actors::sequencer::Sequencer;
+use crate::actors::sequencer::{Sequencer, SequencerCommand};
 use crate::actors::Publisher;
-use crate::models::{PackagedSplit, PackagedSplitBatch, SplitUpdate};
+use crate::models::{IndexingGeneration, PackagedSplit, PackagedSplitBatch, SplitUpdate};
 use crate::split_store::IndexingSplitStore;
 
 pub const MAX_CONCURRENT_SPLIT_UPLOAD: usize = 4;
@@ -132,7 +132,8 @@ impl Handler<PackagedSplitBatch> for Uploader {
         ctx: &ActorContext<Self>,
     ) -> Result<(), ActorExitStatus> {
         fail_point!("uploader:before");
-        let (split_uploaded_tx, split_uploaded_rx) = oneshot::channel::<SplitUpdate>();
+        let (split_uploaded_tx, split_uploaded_rx) =
+            oneshot::channel::<SequencerCommand<SplitUpdate>>();
 
         // We send the future to the sequencer right away.
 
@@ -167,6 +168,13 @@ impl Handler<PackagedSplitBatch> for Uploader {
                 fail_point!("uploader:intask:before");
                 let mut packaged_splits_and_metadatas = Vec::new();
                 for split in batch.splits {
+                    if !batch.indexing_generation.is_current().await {
+                        // TODO: Clean up right away instead of letting the GC pick up the trash?
+                        if let Err(_) = split_uploaded_tx.send(SequencerCommand::Cancel) {
+                            bail!("Failed to send cancel command to sequencer. The sequencer is probably dead.");
+                        }
+                        return Ok(())
+                    }
                     let upload_result = stage_and_upload_split(
                         &split,
                         &index_storage,
@@ -181,7 +189,7 @@ impl Handler<PackagedSplitBatch> for Uploader {
                     }
                     packaged_splits_and_metadatas.push((split, upload_result.unwrap()));
                 }
-                let publisher_message = make_publish_operation(index_id, packaged_splits_and_metadatas, batch.checkpoint_delta_opt, batch.date_of_birth);
+                let publisher_message = make_publish_operation(index_id, batch.indexing_generation, packaged_splits_and_metadatas, batch.checkpoint_delta_opt, batch.date_of_birth);
                 if let Err(publisher_message) = split_uploaded_tx.send(publisher_message) {
                     bail!(
                         "Failed to send upload split `{:?}`. The publisher is probably dead.",
@@ -216,17 +224,19 @@ fn create_split_metadata(split: &PackagedSplit, footer_offsets: Range<u64>) -> S
 
 fn make_publish_operation(
     index_id: String,
+    indexing_generation: IndexingGeneration,
     packaged_splits_and_metadatas: Vec<(PackagedSplit, SplitMetadata)>,
     checkpoint_delta_opt: Option<IndexCheckpointDelta>,
     date_of_birth: Instant,
-) -> SplitUpdate {
+) -> SequencerCommand<SplitUpdate> {
     assert!(!packaged_splits_and_metadatas.is_empty());
     let replaced_split_ids = packaged_splits_and_metadatas
         .iter()
         .flat_map(|(split, _)| split.replaced_split_ids.clone())
         .collect::<HashSet<_>>();
-    SplitUpdate {
+    SequencerCommand::Proceed(SplitUpdate {
         index_id,
+        indexing_generation,
         new_splits: packaged_splits_and_metadatas
             .into_iter()
             .map(|split_and_meta| split_and_meta.1)
@@ -234,7 +244,7 @@ fn make_publish_operation(
         replaced_split_ids: Vec::from_iter(replaced_split_ids),
         checkpoint_delta_opt,
         date_of_birth,
-    }
+    })
 }
 
 async fn stage_and_upload_split(

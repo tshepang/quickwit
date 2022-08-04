@@ -129,7 +129,7 @@ impl Handler<IndexedSplitBatch> for Packager {
     ) -> Result<(), ActorExitStatus> {
         info!(split_ids=?batch.splits.iter().map(|split| split.split_id.clone()).collect_vec(), "start-packaging-splits");
         for split in &batch.splits {
-            if let Some(controlled_directory) = split.controlled_directory_opt.as_ref() {
+            if let Some(controlled_directory) = &split.controlled_directory_opt {
                 controlled_directory.set_progress_and_kill_switch(
                     ctx.progress().clone(),
                     ctx.kill_switch().clone(),
@@ -139,12 +139,20 @@ impl Handler<IndexedSplitBatch> for Packager {
         fail_point!("packager:before");
         let mut packaged_splits = Vec::new();
         for split in batch.splits {
+            if !batch.indexing_generation.is_current().await {
+                return Ok(());
+            }
             let packaged_split = self.process_indexed_split(split, ctx).await?;
             packaged_splits.push(packaged_split);
         }
         ctx.send_message(
             &self.uploader_mailbox,
-            PackagedSplitBatch::new(packaged_splits, batch.checkpoint_delta, batch.date_of_birth),
+            PackagedSplitBatch::new(
+                packaged_splits,
+                batch.indexing_generation,
+                batch.checkpoint_delta,
+                batch.date_of_birth,
+            ),
         )
         .await?;
         fail_point!("packager:after");

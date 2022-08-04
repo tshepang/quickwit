@@ -27,7 +27,7 @@ use quickwit_metastore::Metastore;
 use tracing::info;
 
 use crate::actors::{GarbageCollector, MergePlanner};
-use crate::models::{NewSplits, SplitUpdate};
+use crate::models::{IndexingGeneration, NewSplits, SplitUpdate};
 use crate::source::{SourceActor, SuggestTruncate};
 
 #[derive(Debug, Clone, Default)]
@@ -126,6 +126,7 @@ impl Handler<SplitUpdate> for Publisher {
 
         let SplitUpdate {
             index_id,
+            indexing_generation,
             new_splits,
             replaced_split_ids,
             date_of_birth,
@@ -136,17 +137,21 @@ impl Handler<SplitUpdate> for Publisher {
 
         let replaced_split_ids_ref_vec: Vec<&str> =
             replaced_split_ids.iter().map(String::as_str).collect();
-
-        self.metastore
-            .publish_splits(
-                &index_id,
-                &split_ids[..],
-                &replaced_split_ids_ref_vec,
-                checkpoint_delta_opt.clone(),
-            )
-            .await
-            .context("Failed to publish splits.")?;
-
+        {
+            let guard = indexing_generation.lock().await;
+            if !guard.is_current() {
+                return Ok(());
+            }
+            self.metastore
+                .publish_splits(
+                    &index_id,
+                    &split_ids[..],
+                    &replaced_split_ids_ref_vec,
+                    checkpoint_delta_opt.clone(),
+                )
+                .await
+                .context("Failed to publish splits.")?;
+        }
         info!(new_splits=?split_ids, tts=%date_of_birth.elapsed().as_secs_f32(), checkpoint_delta=?checkpoint_delta_opt, "publish-new-splits");
         if let Some(source_mailbox) = self.source_mailbox_opt.as_ref() {
             if let Some(checkpoint) = checkpoint_delta_opt {

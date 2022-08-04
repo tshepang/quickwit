@@ -24,6 +24,7 @@ use std::time::Instant;
 
 use quickwit_metastore::checkpoint::IndexCheckpointDelta;
 
+use super::IndexingGeneration;
 use crate::models::ScratchDirectory;
 
 pub struct PackagedSplit {
@@ -60,6 +61,7 @@ impl fmt::Debug for PackagedSplit {
 #[derive(Debug)]
 pub struct PackagedSplitBatch {
     pub splits: Vec<PackagedSplit>,
+    pub indexing_generation: IndexingGeneration,
     pub checkpoint_delta_opt: Option<IndexCheckpointDelta>,
     pub date_of_birth: Instant,
 }
@@ -71,6 +73,7 @@ impl PackagedSplitBatch {
     /// - all splits must be on the same `index_id`.
     pub fn new(
         splits: Vec<PackagedSplit>,
+        indexing_generation: IndexingGeneration,
         checkpoint_delta_opt: Option<IndexCheckpointDelta>,
         date_of_birth: Instant,
     ) -> Self {
@@ -86,6 +89,7 @@ impl PackagedSplitBatch {
         );
         Self {
             splits,
+            indexing_generation,
             checkpoint_delta_opt,
             date_of_birth,
         }

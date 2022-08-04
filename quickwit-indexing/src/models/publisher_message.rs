@@ -24,8 +24,11 @@ use itertools::Itertools;
 use quickwit_metastore::checkpoint::IndexCheckpointDelta;
 use quickwit_metastore::SplitMetadata;
 
+use crate::models::IndexingGeneration;
+
 pub struct SplitUpdate {
     pub index_id: String,
+    pub indexing_generation: IndexingGeneration,
     pub new_splits: Vec<SplitMetadata>,
     pub replaced_split_ids: Vec<String>,
     pub checkpoint_delta_opt: Option<IndexCheckpointDelta>,

@@ -37,11 +37,14 @@ use tantivy::schema::{Field, Schema, Value};
 use tantivy::store::{Compressor, ZstdCompressor};
 use tantivy::{Document, IndexBuilder, IndexSettings, IndexSortByField};
 use tokio::runtime::Handle;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use ulid::Ulid;
 
 use crate::actors::Packager;
-use crate::models::{IndexedSplit, IndexedSplitBatch, IndexingDirectory, RawDocBatch};
+use crate::models::{
+    IndexedSplit, IndexedSplitBatch, IndexingDirectory, IndexingGeneration, NewIndexingGeneration,
+    RawDocBatch,
+};
 
 #[derive(Debug)]
 struct CommitTimeout {
@@ -96,6 +99,7 @@ struct IndexerState {
     source_id: String,
     doc_mapper: Arc<dyn DocMapper>,
     indexing_directory: IndexingDirectory,
+    indexing_generation: IndexingGeneration,
     indexing_settings: IndexingSettings,
     timestamp_field_opt: Option<Field>,
     schema: Schema,
@@ -147,12 +151,13 @@ impl IndexerState {
 
     fn create_workbench(&self) -> anyhow::Result<IndexingWorkbench> {
         let workbench = IndexingWorkbench {
+            workbench_id: Ulid::new(),
+            indexed_splits: FnvHashMap::with_capacity_and_hasher(250, Default::default()),
+            indexing_generation: self.indexing_generation.clone(),
             checkpoint_delta: IndexCheckpointDelta {
                 source_id: self.source_id.clone(),
                 source_delta: SourceCheckpointDelta::default(),
             },
-            indexed_splits: FnvHashMap::with_capacity_and_hasher(250, Default::default()),
-            workbench_id: Ulid::new(),
             date_of_birth: Instant::now(),
         };
         Ok(workbench)
@@ -234,6 +239,10 @@ impl IndexerState {
         counters: &mut IndexerCounters,
         ctx: &ActorContext<Indexer>,
     ) -> Result<(), ActorExitStatus> {
+        if !self.indexing_generation.is_current().await {
+            debug!("");
+            return Ok(());
+        }
         let IndexingWorkbench {
             checkpoint_delta,
             indexed_splits,
@@ -288,9 +297,10 @@ impl IndexerState {
 
 /// A workbench hosts the set of `IndexedSplit` that will are being built.
 struct IndexingWorkbench {
-    checkpoint_delta: IndexCheckpointDelta,
-    indexed_splits: FnvHashMap<u64, IndexedSplit>,
     workbench_id: Ulid,
+    indexed_splits: FnvHashMap<u64, IndexedSplit>,
+    indexing_generation: IndexingGeneration,
+    checkpoint_delta: IndexCheckpointDelta,
     // TODO create this Instant on the source side to be more accurate.
     // Right now this instant is used to compute time-to-search, but this
     // does not include the amount of time a document could have been
@@ -299,7 +309,7 @@ struct IndexingWorkbench {
 }
 
 pub struct Indexer {
-    indexer_state: IndexerState,
+    state: IndexerState,
     packager_mailbox: Mailbox<Packager>,
     indexing_workbench_opt: Option<IndexingWorkbench>,
     metastore: Arc<dyn Metastore>,
@@ -364,9 +374,8 @@ impl Handler<CommitTimeout> for Indexer {
         commit_timeout: CommitTimeout,
         ctx: &ActorContext<Self>,
     ) -> Result<(), ActorExitStatus> {
-        if let Some(indexing_workbench) = self.indexing_workbench_opt.as_ref() {
-            // This is a timeout for a different split.
-            // We can ignore it.
+        if let Some(indexing_workbench) = &self.indexing_workbench_opt {
+            // If this is a timeout for a different workbench, we can ignore it.
             if indexing_workbench.workbench_id != commit_timeout.workbench_id {
                 return Ok(());
             }
@@ -389,6 +398,22 @@ impl Handler<RawDocBatch> for Indexer {
     }
 }
 
+#[async_trait]
+impl Handler<NewIndexingGeneration> for Indexer {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        message: NewIndexingGeneration,
+        ctx: &ActorContext<Self>,
+    ) -> Result<(), ActorExitStatus> {
+        let NewIndexingGeneration(indexing_generation) = message;
+        self.state.indexing_generation = indexing_generation;
+        self.indexing_workbench_opt = None;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum CommitTrigger {
     Timeout,
@@ -403,6 +428,7 @@ impl Indexer {
         source_id: String,
         metastore: Arc<dyn Metastore>,
         indexing_directory: IndexingDirectory,
+        indexing_generation: IndexingGeneration,
         indexing_settings: IndexingSettings,
         packager_mailbox: Mailbox<Packager>,
     ) -> Self {
@@ -424,11 +450,12 @@ impl Indexer {
             }),
         };
         Self {
-            indexer_state: IndexerState {
+            state: IndexerState {
                 index_id,
                 source_id,
                 doc_mapper,
                 indexing_directory,
+                indexing_generation,
                 indexing_settings,
                 timestamp_field_opt,
                 schema,
@@ -447,7 +474,7 @@ impl Indexer {
         ctx: &ActorContext<Self>,
     ) -> Result<(), ActorExitStatus> {
         fail_point!("indexer:batch:before");
-        self.indexer_state
+        self.state
             .process_batch(
                 batch,
                 &mut self.indexing_workbench_opt,
@@ -456,7 +483,7 @@ impl Indexer {
             )
             .await?;
         if self.counters.num_docs_in_workbench
-            >= self.indexer_state.indexing_settings.split_num_docs_target as u64
+            >= self.state.indexing_settings.split_num_docs_target as u64
         {
             self.send_to_packager(CommitTrigger::NumDocsLimit, ctx)
                 .await?;
@@ -472,8 +499,9 @@ impl Indexer {
         ctx: &ActorContext<Self>,
     ) -> anyhow::Result<()> {
         let IndexingWorkbench {
-            checkpoint_delta,
             indexed_splits,
+            indexing_generation,
+            checkpoint_delta,
             date_of_birth,
             ..
         } = if let Some(indexing_workbench) = self.indexing_workbench_opt.take() {
@@ -487,24 +515,22 @@ impl Indexer {
         // Avoid producing empty split, but still update the checkpoint to avoid
         // reprocessing the same faulty documents.
         if splits.is_empty() {
+            let guard = indexing_generation.lock().await;
+            if !guard.is_current() {
+                return Ok(());
+            }
             self.metastore
-                .publish_splits(
-                    &self.indexer_state.index_id,
-                    &[],
-                    &[],
-                    Some(checkpoint_delta),
-                )
+                .publish_splits(&self.state.index_id, &[], &[], Some(checkpoint_delta))
                 .await
                 .with_context(|| {
                     format!(
                         "Failed to update the checkpoint for {}, {} after a split containing only \
                          errors.",
-                        &self.indexer_state.index_id, &self.indexer_state.source_id
+                        &self.state.index_id, &self.state.source_id
                     )
                 })?;
             return Ok(());
         }
-
         let num_splits = splits.len() as u64;
         let split_ids = splits.iter().map(|split| &split.split_id).join(",");
         info!(commit_trigger=?commit_trigger, split_ids=%split_ids, num_docs=self.counters.num_docs_in_workbench, "send-to-packager");
@@ -512,6 +538,7 @@ impl Indexer {
             &self.packager_mailbox,
             IndexedSplitBatch {
                 splits,
+                indexing_generation,
                 checkpoint_delta: Some(checkpoint_delta),
                 date_of_birth,
             },

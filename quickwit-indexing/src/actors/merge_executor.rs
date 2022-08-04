@@ -44,7 +44,9 @@ use tracing::{debug, info, info_span, Span};
 use crate::actors::Packager;
 use crate::controlled_directory::ControlledDirectory;
 use crate::merge_policy::MergeOperation;
-use crate::models::{IndexedSplit, IndexedSplitBatch, MergeScratch, ScratchDirectory};
+use crate::models::{
+    IndexedSplit, IndexedSplitBatch, IndexingGeneration, MergeScratch, ScratchDirectory,
+};
 
 pub struct MergeExecutor {
     index_id: String,
@@ -338,6 +340,7 @@ impl MergeExecutor {
             &self.merge_packager_mailbox,
             IndexedSplitBatch {
                 splits: vec![indexed_split],
+                indexing_generation: IndexingGeneration::default(),
                 checkpoint_delta: Default::default(),
                 date_of_birth: start,
             },
@@ -491,6 +494,7 @@ impl MergeExecutor {
             &self.merge_packager_mailbox,
             IndexedSplitBatch {
                 splits: indexed_splits,
+                indexing_generation: IndexingGeneration::default(),
                 checkpoint_delta: None,
                 date_of_birth: start,
             },

@@ -91,12 +91,14 @@ pub use vec_source::{VecSource, VecSourceFactory};
 pub use void_source::{VoidSource, VoidSourceFactory};
 
 use crate::actors::Indexer;
+use crate::models::{IndexingGeneration, IndexingGenerationLeader};
 use crate::source::ingest_api_source::IngestApiSourceFactory;
 
 /// Runtime configuration used during execution of a source actor.
 pub struct SourceExecutionContext {
     pub metastore: Arc<dyn Metastore>,
     pub index_id: String,
+    pub indexing_generation_leader: IndexingGenerationLeader,
     pub config: SourceConfig,
 }
 

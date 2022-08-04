@@ -42,7 +42,9 @@ use crate::actors::{
     GarbageCollector, Indexer, MergeExecutor, MergePlanner, NamedField, Packager, Publisher,
     Uploader,
 };
-use crate::models::{IndexingDirectory, IndexingStatistics, Observe};
+use crate::models::{
+    IndexingDirectory, IndexingGeneration, IndexingGenerationLeader, IndexingStatistics, Observe,
+};
 use crate::source::{quickwit_supported_sources, SourceActor, SourceExecutionContext};
 use crate::split_store::{IndexingSplitStore, IndexingSplitStoreParams};
 use crate::{MergePolicy, StableMultitenantWithTimestampMergePolicy};
@@ -191,6 +193,8 @@ impl IndexingPipeline {
     // TODO this should return an error saying whether we can retry or not.
     #[instrument(name="", level="info", skip_all, fields(index=%self.params.index_id, gen=self.generation()))]
     async fn spawn_pipeline(&mut self, ctx: &ActorContext<Self>) -> anyhow::Result<()> {
+        let indexing_generation_leader = IndexingGenerationLeader::default();
+        let indexing_generation = indexing_generation_leader.current().await;
         self.statistics.num_spawn_attempts += 1;
         self.kill_switch = KillSwitch::default();
         let stable_multitenant_merge_policy = StableMultitenantWithTimestampMergePolicy {
@@ -383,6 +387,7 @@ impl IndexingPipeline {
             self.params.source.source_id.clone(),
             self.params.metastore.clone(),
             self.params.indexing_directory.clone(),
+            indexing_generation.clone(),
             self.params.indexing_settings.clone(),
             packager_mailbox,
         );
@@ -407,6 +412,7 @@ impl IndexingPipeline {
                 Arc::new(SourceExecutionContext {
                     metastore: self.params.metastore.clone(),
                     index_id: self.params.index_id.clone(),
+                    indexing_generation_leader,
                     config: self.params.source.clone(),
                 }),
                 source_checkpoint,

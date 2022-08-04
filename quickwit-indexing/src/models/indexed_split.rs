@@ -29,6 +29,7 @@ use tantivy::directory::MmapDirectory;
 use tantivy::merge_policy::NoMergePolicy;
 use tantivy::IndexBuilder;
 
+use super::IndexingGeneration;
 use crate::controlled_directory::ControlledDirectory;
 use crate::models::ScratchDirectory;
 use crate::new_split_id;
@@ -119,6 +120,7 @@ impl IndexedSplit {
 #[derive(Debug)]
 pub struct IndexedSplitBatch {
     pub splits: Vec<IndexedSplit>,
+    pub indexing_generation: IndexingGeneration,
     pub checkpoint_delta: Option<IndexCheckpointDelta>,
     pub date_of_birth: Instant,
 }

@@ -45,7 +45,7 @@ use tracing::{debug, error, info, warn};
 use {flume, oneshot};
 
 use crate::actors::Indexer;
-use crate::models::RawDocBatch;
+use crate::models::{IndexingGeneration, NewIndexingGeneration, RawDocBatch};
 use crate::source::{Source, SourceContext, SourceExecutionContext, TypedSourceFactory};
 
 /// We try to emit chewable batches for the indexer.
@@ -313,23 +313,37 @@ impl KafkaSource {
     async fn process_kafka_event(
         &mut self,
         ctx: &SourceContext,
+        indexer_mailbox: &Mailbox<Indexer>,
         event: RebalanceEvent,
+        batch: &mut BatchBuilder,
     ) -> anyhow::Result<()> {
         match event {
+            RebalanceEvent::Starting { ack_tx } => {
+                self.process_pre_rebalance(ctx, indexer_mailbox, batch, ack_tx)
+                    .await?
+            }
             RebalanceEvent::Assignment { assignment, ack_tx } => {
                 self.process_post_rebalance(ctx, &assignment, ack_tx)
                     .await?
             }
-            RebalanceEvent::Starting { ack_tx } => self.process_pre_rebalance(ack_tx).await?,
         }
         Ok(())
     }
 
-    async fn process_pre_rebalance(&mut self, ack_tx: oneshot::Sender<()>) -> anyhow::Result<()> {
-        if let Err(error) = ack_tx.send(()) {
-            error!(error=?error, index_id=%self.ctx.index_id, source_id=%self.ctx.config.source_id, "Consumer context ack channel was dropped.");
-            bail!("Failed to ack pre-rebalance event: consumer context ack channel was dropped.");
-        }
+    async fn process_pre_rebalance(
+        &mut self,
+        ctx: &SourceContext,
+        indexer_mailbox: &Mailbox<Indexer>,
+        batch: &mut BatchBuilder,
+        ack_tx: oneshot::Sender<()>,
+    ) -> anyhow::Result<()> {
+        let indexing_generation = self.ctx.indexing_generation_leader.inc().await;
+        ctx.send_message(indexer_mailbox, NewIndexingGeneration(indexing_generation))
+            .await?;
+        ack_tx
+            .send(())
+            .map_err(|error| anyhow!("Consumer context was dropped: {:?}", error))?;
+        batch.clear();
         Ok(())
     }
 
@@ -364,16 +378,15 @@ impl KafkaSource {
             })
             .collect();
 
-        if let Err(error) = ack_tx.send(next_offsets) {
-            error!(error=?error, index_id=%self.ctx.index_id, source_id=%self.ctx.config.source_id, "Consumer context ack channel was dropped.");
-            bail!("Failed to ack post-rebalance event: consumer context ack channel was dropped.");
-        }
+        ack_tx
+            .send(next_offsets)
+            .map_err(|error| anyhow!("Consumer context was dropped: {:?}", error))?;
+
         self.state.num_active_partitions = NumActivePartitions::Some(assignment.len());
         self.state.assigned_partitions = assignment
             .iter()
             .map(|partition| (*partition, PartitionId::from(*partition as i64)))
             .collect();
-
         Ok(())
     }
 }
@@ -392,6 +405,12 @@ impl BatchBuilder {
             checkpoint_delta: self.checkpoint_delta,
         }
     }
+
+    fn clear(&mut self) {
+        self.docs.clear();
+        self.checkpoint_delta = SourceCheckpointDelta::default();
+        self.num_bytes = 0;
+    }
 }
 
 #[async_trait]
@@ -409,7 +428,7 @@ impl Source for KafkaSource {
             tokio::select! {
                 event_res = self.events_rx.recv_async() => {
                     match event_res {
-                        Ok(event) => self.process_kafka_event(ctx, event).await?,
+                        Ok(event) => self.process_kafka_event(ctx, indexer_mailbox, event, &mut batch).await?,
                         Err(error) => Err(ActorExitStatus::from(anyhow!("Consumer context was dropped: {:?}", error)))?,
                     }
                 },

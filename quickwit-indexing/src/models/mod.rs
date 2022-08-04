@@ -19,6 +19,7 @@
 
 mod indexed_split;
 mod indexing_directory;
+mod indexing_generation;
 mod indexing_service_message;
 mod indexing_statistics;
 mod merge_planner_message;
@@ -30,6 +31,9 @@ mod scratch_directory;
 
 pub use indexed_split::{IndexedSplit, IndexedSplitBatch};
 pub use indexing_directory::{IndexingDirectory, CACHE};
+pub use indexing_generation::{
+    IndexingGeneration, IndexingGenerationLeader, NewIndexingGeneration,
+};
 pub use indexing_service_message::{
     DetachPipeline, IndexingPipelineId, ObservePipeline, ShutdownPipeline, SpawnMergePipeline,
     SpawnPipeline, SpawnPipelinesForIndex,
