@@ -22,7 +22,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
 use async_trait::async_trait;
 use itertools::Itertools;
 use quickwit_actors::{ActorExitStatus, Mailbox};
@@ -31,16 +31,15 @@ use quickwit_metastore::checkpoint::{
     PartitionId, Position, SourceCheckpoint, SourceCheckpointDelta,
 };
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
-use rdkafka::consumer::stream_consumer::StreamConsumer;
 use rdkafka::consumer::{
     BaseConsumer, Consumer, ConsumerContext, DefaultConsumerContext, Rebalance,
 };
 use rdkafka::error::{KafkaError, KafkaResult};
 use rdkafka::message::BorrowedMessage;
 use rdkafka::util::Timeout;
-use rdkafka::{ClientContext, Message, Offset, TopicPartitionList};
+use rdkafka::{ClientContext, Message, Offset, Timestamp, TopicPartitionList};
 use serde_json::json;
-use tokio::task::spawn_blocking;
+use tokio::task::{spawn_blocking, JoinHandle};
 use tokio::time;
 use tracing::{debug, error, info, warn};
 use {flume, oneshot};
@@ -126,19 +125,15 @@ impl ConsumerContext for RdKafkaContext {
             let next_offsets = ack_rx
                 .recv()
                 .expect("Failed to receive post-rebalance event ack.");
-            update_assignment(&self.topic, tpl, next_offsets);
+            for (partition, offset) in next_offsets {
+                let mut partition = tpl.find_partition(&self.topic, partition).expect("Failed to find partition in assignment. This should never happen! Please, report on https://github.com/quickwit-oss/quickwit/issues.");
+                partition.set_offset(offset).expect("Failed to convert offset to librdkafka internal representation. This should never happen! Please, report on https://github.com/quickwit-oss/quickwit/issues.");
+            }
         }
     }
 
     fn commit_callback(&self, result: KafkaResult<()>, _offsets: &TopicPartitionList) {
         info!("Committing offsets: {:?}", result);
-    }
-}
-
-fn update_assignment(topic: &str, tpl: &TopicPartitionList, next_offsets: Vec<(i32, Offset)>) {
-    for (partition, offset) in next_offsets {
-        let mut partition = tpl.find_partition(topic, partition).expect("Failed to find partition in assignment. This should never happen! Please, report on https://github.com/quickwit-oss/quickwit/issues.");
-        partition.set_offset(offset).expect("Failed to convert offset to librdkafka internal representation. This should never happen! Please, report on https://github.com/quickwit-oss/quickwit/issues.");
     }
 }
 
@@ -174,7 +169,7 @@ impl Default for NumActivePartitions {
     }
 }
 
-type RdKafkaConsumer = StreamConsumer<RdKafkaContext>;
+type RdKafkaConsumer = BaseConsumer<RdKafkaContext>;
 
 #[derive(Default)]
 pub struct KafkaSourceState {
@@ -196,10 +191,12 @@ pub struct KafkaSourceState {
 pub struct KafkaSource {
     ctx: Arc<SourceExecutionContext>,
     topic: String,
-    consumer: Arc<RdKafkaConsumer>,
     state: KafkaSourceState,
-    rebalance_events: flume::Receiver<RebalanceEvent>,
     backfill_mode_enabled: bool,
+    events_rx: flume::Receiver<RebalanceEvent>,
+    messages_rx: flume::Receiver<KafkaMessage>,
+    _consumer: Arc<RdKafkaConsumer>,
+    _poll_loop_jh: JoinHandle<()>,
 }
 
 impl fmt::Debug for KafkaSource {
@@ -222,18 +219,20 @@ impl KafkaSource {
         let topic = params.topic.clone();
         let backfill_mode_enabled = params.enable_backfill_mode;
 
-        let (rebalance_sender, rebalance_receiver) = flume::bounded(32);
-        let consumer = create_consumer(&ctx.config.source_id, params, rebalance_sender)?;
-
         info!(
             index_id=%ctx.index_id,
             source_id=%ctx.config.source_id,
             topic=%topic,
             "Starting Kafka source."
         );
+
+        let (events_tx, events_rx) = flume::bounded(2);
+        let consumer = create_consumer(&ctx.config.source_id, params, events_tx)?;
         consumer
             .subscribe(&[&topic])
             .with_context(|| format!("Failed to subscribe to topic `{topic}`."))?;
+
+        let (poll_loop_jh, messages_rx) = spawn_consumer_poll_loop(consumer.clone());
 
         let state = KafkaSourceState {
             ..Default::default()
@@ -241,11 +240,89 @@ impl KafkaSource {
         Ok(KafkaSource {
             ctx: ctx.clone(),
             topic,
-            consumer,
             state,
-            rebalance_events: rebalance_receiver,
             backfill_mode_enabled,
+            events_rx,
+            messages_rx,
+            _consumer: consumer,
+            _poll_loop_jh: poll_loop_jh,
         })
+    }
+
+    async fn process_kafka_message(
+        &mut self,
+        message: KafkaMessage,
+        batch: &mut BatchBuilder,
+    ) -> anyhow::Result<()> {
+        match message {
+            KafkaMessage::Message {
+                doc_opt,
+                payload_len,
+                partition,
+                offset,
+                ..
+            } => {
+                if let Some(doc) = doc_opt {
+                    batch.docs.push(doc);
+                } else {
+                    self.state.num_invalid_messages += 1;
+                }
+                batch.num_bytes += payload_len;
+                self.state.num_bytes_processed += payload_len;
+                self.state.num_messages_processed += 1;
+
+                let partition_id = self
+                    .state
+                    .assigned_partitions
+                    .get(&partition)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Received message from unassigned partition `{}`. Assigned \
+                             partitions: `{{{}}}`.",
+                            partition,
+                            self.state.assigned_partitions.keys().join(", "),
+                        )
+                    })?
+                    .clone();
+                let current_position = Position::from(offset);
+                let previous_position = self
+                    .state
+                    .current_positions
+                    .insert(partition, current_position.clone())
+                    .unwrap_or_else(|| previous_position_for_offset(offset));
+                batch
+                    .checkpoint_delta
+                    .record_partition_delta(partition_id, previous_position, current_position)
+                    .context("Failed to record partition delta.")?;
+                Ok(())
+            }
+            KafkaMessage::PartitionEOF(partition) => {
+                info!(
+                    topic=%self.topic,
+                    partition=%partition,
+                    num_active_partitions=?self.state.num_active_partitions,
+                    "Reached end of partition."
+                );
+                self.state.num_active_partitions.dec();
+                Ok(())
+            }
+            KafkaMessage::Err(error) => Err(error),
+        }
+    }
+
+    async fn process_kafka_event(
+        &mut self,
+        ctx: &SourceContext,
+        event: RebalanceEvent,
+    ) -> anyhow::Result<()> {
+        match event {
+            RebalanceEvent::Assignment { assignment, ack_tx } => {
+                self.process_post_rebalance(ctx, &assignment, ack_tx)
+                    .await?
+            }
+            RebalanceEvent::Starting { ack_tx } => self.process_pre_rebalance(ack_tx).await?,
+        }
+        Ok(())
     }
 
     async fn process_pre_rebalance(&mut self, ack_tx: oneshot::Sender<()>) -> anyhow::Result<()> {
@@ -258,13 +335,12 @@ impl KafkaSource {
 
     async fn process_post_rebalance(
         &mut self,
+        ctx: &SourceContext,
         assignment: &[i32],
         ack_tx: oneshot::Sender<Vec<(i32, Offset)>>,
     ) -> anyhow::Result<()> {
-        let index_metadata = self
-            .ctx
-            .metastore
-            .index_metadata(&self.ctx.index_id)
+        let index_metadata = ctx
+            .protect_future(self.ctx.metastore.index_metadata(&self.ctx.index_id))
             .await
             .with_context(|| {
                 format!(
@@ -292,7 +368,6 @@ impl KafkaSource {
             error!(error=?error, index_id=%self.ctx.index_id, source_id=%self.ctx.config.source_id, "Consumer context ack channel was dropped.");
             bail!("Failed to ack post-rebalance event: consumer context ack channel was dropped.");
         }
-
         self.state.num_active_partitions = NumActivePartitions::Some(assignment.len());
         self.state.assigned_partitions = assignment
             .iter()
@@ -303,6 +378,22 @@ impl KafkaSource {
     }
 }
 
+#[derive(Debug, Default)]
+struct BatchBuilder {
+    docs: Vec<String>,
+    checkpoint_delta: SourceCheckpointDelta,
+    num_bytes: u64,
+}
+
+impl BatchBuilder {
+    fn build(self) -> RawDocBatch {
+        RawDocBatch {
+            docs: self.docs,
+            checkpoint_delta: self.checkpoint_delta,
+        }
+    }
+}
+
 #[async_trait]
 impl Source for KafkaSource {
     async fn emit_batches(
@@ -310,90 +401,35 @@ impl Source for KafkaSource {
         indexer_mailbox: &Mailbox<Indexer>,
         ctx: &SourceContext,
     ) -> Result<Duration, ActorExitStatus> {
-        let mut batch_num_bytes = 0;
-        let mut docs = Vec::new();
-        let mut checkpoint_delta = SourceCheckpointDelta::default();
-
+        let mut batch = BatchBuilder::default();
         let deadline = time::sleep(quickwit_actors::HEARTBEAT / 2);
         tokio::pin!(deadline);
 
         loop {
             tokio::select! {
-                message_res = self.rebalance_events.recv_async() => {
-                    match message_res {
-                        Ok(RebalanceEvent::Starting { ack_tx }) => self.process_pre_rebalance(ack_tx).await?,
-                        Ok(RebalanceEvent::Assignment { assignment, ack_tx }) => self.process_post_rebalance(&assignment, ack_tx).await?,
-                        Err(error) => {
-                            error!(error=?error, index_id=%self.ctx.index_id, source_id=%self.ctx.config.source_id, "Consumer context was dropped.");
-                            return Err(ActorExitStatus::Failure(Arc::new(anyhow::anyhow!(error))));
-                        }
+                event_res = self.events_rx.recv_async() => {
+                    match event_res {
+                        Ok(event) => self.process_kafka_event(ctx, event).await?,
+                        Err(error) => Err(ActorExitStatus::from(anyhow!("Consumer context was dropped: {:?}", error)))?,
                     }
                 },
-                message_res = self.consumer.recv() => {
-                    let message = match message_res {
-                        Ok(message) => message,
-                        Err(KafkaError::PartitionEOF(partition_id)) => {
-                            self.state.num_active_partitions.dec();
-                            info!(
-                                topic = %self.topic,
-                                partition_id = ?partition_id,
-                                num_active_partitions = ?self.state.num_active_partitions,
-                                "Reached end of partition."
-                            );
-                            continue;
-                        }
-                        // FIXME: This is assuming that Kafka errors are not recoverable, it may not be the
-                        // case.
-                        Err(err) => return Err(ActorExitStatus::from(anyhow::anyhow!(err))),
-                    };
-                    if let Some(doc) = parse_message_payload(&message) {
-                        docs.push(doc);
-                    } else {
-                        self.state.num_invalid_messages += 1;
+                message_res = self.messages_rx.recv_async() => {
+                    match message_res {
+                        Ok(message) => self.process_kafka_message(message, &mut batch).await?,
+                        Err(error) => Err(ActorExitStatus::from(anyhow!("Consumer poll loop was dropped: {:?}", error)))?,
                     }
-                    batch_num_bytes += message.payload_len() as u64;
-                    self.state.num_bytes_processed += message.payload_len() as u64;
-                    self.state.num_messages_processed += 1;
-
-                    let partition_id = self
-                        .state
-                        .assigned_partitions
-                        .get(&message.partition())
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "Received message from unassigned partition `{}`. Assigned partitions: \
-                                 `{{{}}}`.",
-                                message.partition(),
-                                self.state.assigned_partitions.keys().join(", "),
-                            )
-                        })?
-                        .clone();
-                    let current_position = Position::from(message.offset());
-                    let previous_position = self
-                        .state
-                        .current_positions
-                        .insert(message.partition(), current_position.clone())
-                        .unwrap_or_else(|| previous_position_for_offset(message.offset()));
-                    checkpoint_delta
-                        .record_partition_delta(partition_id, previous_position, current_position)
-                        .context("Failed to record partition delta.")?;
-
-                    if batch_num_bytes >= TARGET_BATCH_NUM_BYTES {
+                    if batch.num_bytes >= TARGET_BATCH_NUM_BYTES {
                         break;
                     }
-                    ctx.record_progress();
                 }
                 _ = &mut deadline => {
                     break;
                 }
             }
+            ctx.record_progress();
         }
-        if !checkpoint_delta.is_empty() {
-            let batch = RawDocBatch {
-                docs,
-                checkpoint_delta,
-            };
-            ctx.send_message(indexer_mailbox, batch).await?;
+        if !batch.checkpoint_delta.is_empty() {
+            ctx.send_message(indexer_mailbox, batch.build()).await?;
         }
         if self.backfill_mode_enabled && self.state.num_active_partitions.is_zero() {
             info!(topic = %self.topic, "Reached end of topic.");
@@ -438,6 +474,49 @@ impl Source for KafkaSource {
             "num_invalid_messages": self.state.num_invalid_messages,
         })
     }
+}
+
+#[derive(Debug)]
+pub(crate) enum KafkaMessage {
+    Message {
+        doc_opt: Option<String>,
+        payload_len: u64,
+        partition: i32,
+        offset: i64,
+        _timestamp: Timestamp,
+    },
+    PartitionEOF(i32),
+    Err(anyhow::Error),
+}
+
+impl From<KafkaResult<BorrowedMessage<'_>>> for KafkaMessage {
+    fn from(message_res: KafkaResult<BorrowedMessage<'_>>) -> Self {
+        match message_res {
+            Ok(message) => Self::Message {
+                doc_opt: parse_message_payload(&message),
+                payload_len: message.payload_len() as u64,
+                partition: message.partition(),
+                offset: message.offset() as i64,
+                _timestamp: message.timestamp(),
+            },
+            Err(KafkaError::PartitionEOF(partition)) => Self::PartitionEOF(partition),
+            Err(error) => Self::Err(anyhow::anyhow!(error)),
+        }
+    }
+}
+
+fn spawn_consumer_poll_loop(
+    consumer: Arc<RdKafkaConsumer>,
+) -> (JoinHandle<()>, flume::Receiver<KafkaMessage>) {
+    let (messages_tx, messages_rx) = flume::bounded(2);
+    let join_handle = spawn_blocking(move || {
+        while let Some(message) = consumer.poll(None) {
+            if let Err(_) = messages_tx.send(message.into()) {
+                break;
+            }
+        }
+    });
+    (join_handle, messages_rx)
 }
 
 /// Returns the preceding `Position` for the offset.
