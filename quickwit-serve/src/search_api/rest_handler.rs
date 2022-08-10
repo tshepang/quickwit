@@ -90,6 +90,11 @@ pub struct SearchRequestQueryString {
     #[serde(rename(deserialize = "search_field"))]
     #[serde(deserialize_with = "from_simple_list")]
     pub search_fields: Option<Vec<String>>,
+    /// Fields to extract snippet on
+    #[serde(default)]
+    #[serde(rename(deserialize = "snippet_fields"))]
+    #[serde(deserialize_with = "from_simple_list")]
+    pub snippet_fields: Option<Vec<String>>,
     /// If set, restrict search to documents with a `timestamp >= start_timestamp`.
     pub start_timestamp: Option<i64>,
     /// If set, restrict search to documents with a `timestamp < end_timestamp``.
@@ -135,6 +140,7 @@ async fn search_endpoint(
         index_id,
         query: search_request.query,
         search_fields: search_request.search_fields.unwrap_or_default(),
+        snippet_fields: search_request.snippet_fields.unwrap_or_default(),
         start_timestamp: search_request.start_timestamp,
         end_timestamp: search_request.end_timestamp,
         max_hits: search_request.max_hits,
@@ -218,6 +224,11 @@ struct SearchStreamRequestQueryString {
     #[serde(rename(deserialize = "search_field"))]
     #[serde(deserialize_with = "from_simple_list")]
     pub search_fields: Option<Vec<String>>,
+    /// Fields to extract snippet on
+    #[serde(default)]
+    #[serde(rename(deserialize = "snippet_fields"))]
+    #[serde(deserialize_with = "from_simple_list")]
+    pub snippet_fields: Option<Vec<String>>,
     /// If set, restricts search to documents with a `timestamp >= start_timestamp`.
     pub start_timestamp: Option<i64>,
     /// If set, restricts search to documents with a `timestamp < end_timestamp``.
@@ -241,6 +252,7 @@ async fn search_stream_endpoint(
         index_id,
         query: search_request.query,
         search_fields: search_request.search_fields.unwrap_or_default(),
+        snippet_fields: search_request.snippet_fields.unwrap_or_default(),
         start_timestamp: search_request.start_timestamp,
         end_timestamp: search_request.end_timestamp,
         fast_field: search_request.fast_field,
@@ -718,6 +730,7 @@ mod tests {
             &super::SearchStreamRequestQueryString {
                 query: "obama".to_string(),
                 search_fields: None,
+                snippet_fields: None,
                 start_timestamp: None,
                 end_timestamp: None,
                 fast_field: "external_id".to_string(),
@@ -743,6 +756,7 @@ mod tests {
             &super::SearchStreamRequestQueryString {
                 query: "obama".to_string(),
                 search_fields: None,
+                snippet_fields: None,
                 start_timestamp: None,
                 end_timestamp: None,
                 fast_field: "external_id".to_string(),

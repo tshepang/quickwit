@@ -19,7 +19,7 @@
 
 use quickwit_proto::SearchRequest;
 use tantivy::query::{Query, QueryParser, QueryParserError as TantivyQueryParserError};
-use tantivy::schema::{Field, Schema};
+use tantivy::schema::{Field, FieldType, Schema};
 use tantivy_query_grammar::{UserInputAst, UserInputLeaf, UserInputLiteral};
 
 use crate::sort_by::validate_sort_by_field_name;
@@ -49,6 +49,10 @@ pub(crate) fn build_query(
         return Err(
             anyhow::anyhow!("No default field declared and no field specified in query.").into(),
         );
+    }
+
+    if !request.snippet_fields.is_empty() {
+        validate_snippet_fields(&schema, request, &user_input_ast, default_field_names)?;
     }
 
     let search_fields = if request.search_fields.is_empty() {
@@ -82,22 +86,9 @@ fn has_range_clause(user_input_ast: &UserInputAst) -> bool {
 /// Tells if the query has a Term or Range node which does not
 /// specify a search field.
 fn needs_default_search_field(user_input_ast: &UserInputAst) -> bool {
-    match user_input_ast {
-        UserInputAst::Clause(sub_queries) => {
-            for (_, sub_ast) in sub_queries {
-                if needs_default_search_field(sub_ast) {
-                    return true;
-                }
-            }
-            false
-        }
-        UserInputAst::Boost(ast, _) => needs_default_search_field(ast),
-        UserInputAst::Leaf(leaf) => match &**leaf {
-            UserInputLeaf::Literal(UserInputLiteral { field_name, .. }) => field_name.is_none(),
-            UserInputLeaf::Range { field, .. } => field.is_none(),
-            _ => false,
-        },
-    }
+    collect_field_nodes(user_input_ast)
+        .iter()
+        .any(|field_opt| field_opt.is_none())
 }
 
 fn resolve_fields(schema: &Schema, field_names: &[String]) -> anyhow::Result<Vec<Field>> {
@@ -109,6 +100,64 @@ fn resolve_fields(schema: &Schema, field_names: &[String]) -> anyhow::Result<Vec
         fields.push(field);
     }
     Ok(fields)
+}
+
+// Collects the fields nodes on term or range ast nodes
+fn collect_field_nodes(user_input_ast: &UserInputAst) -> Vec<Option<String>> {
+    match user_input_ast {
+        UserInputAst::Clause(sub_queries) => {
+            let mut fields = vec![];
+            for (_, sub_ast) in sub_queries {
+                fields.extend(collect_field_nodes(sub_ast));
+            }
+            fields
+        }
+        UserInputAst::Boost(ast, _) => collect_field_nodes(ast),
+        UserInputAst::Leaf(leaf) => match &**leaf {
+            UserInputLeaf::Literal(UserInputLiteral { field_name, .. }) => vec![field_name.clone()],
+            UserInputLeaf::Range { field, .. } => vec![field.clone()],
+            _ => vec![],
+        },
+    }
+}
+
+#[allow(clippy::needless_collect)]
+fn validate_snippet_fields(
+    schema: &Schema,
+    request: &SearchRequest,
+    user_input_ast: &UserInputAst,
+    default_field_names: &[String],
+) -> anyhow::Result<()> {
+    let query_fields: Vec<String> = collect_field_nodes(user_input_ast)
+        .into_iter()
+        .flatten().collect();
+
+    for field_name in &request.snippet_fields {
+        if !default_field_names.contains(field_name)
+            && !request.search_fields.contains(field_name)
+            && !query_fields.contains(field_name)
+        {
+            return Err(anyhow::anyhow!(
+                "The snippet field `{}` should be a default search field or appear in the query.",
+                field_name
+            ));
+        }
+
+        let field_entry = schema
+            .get_field(field_name)
+            .map(|field| schema.get_field_entry(field))
+            .ok_or_else(|| anyhow::anyhow!("The snippet field `{}` does not exist.", field_name))?;
+        match field_entry.field_type() {
+            FieldType::Str(_) => continue,
+            other => {
+                return Err(anyhow::anyhow!(
+                    "Expected snippet field type to be `Str`, got `{:?}`.",
+                    other
+                ))
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -148,6 +197,7 @@ mod test {
             index_id: "test_index".to_string(),
             query: query_str.to_string(),
             search_fields,
+            snippet_fields: vec![],
             start_timestamp: None,
             end_timestamp: None,
             max_hits: 20,

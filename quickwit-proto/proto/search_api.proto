@@ -83,7 +83,9 @@ message SearchRequest {
 
   // json serialized aggregation_request
   optional string aggregation_request = 11;
-
+  
+  // Fields to extract snippet on
+  repeated string  snippet_fields = 12;
 }
 
 enum SortOrder {
@@ -237,6 +239,13 @@ message FetchDocsRequest {
   // Index URI. The index URI defines the location of the storage that contains the
   // split files.
   string index_uri = 4;
+
+  // Search request. This is a perfect copy of the original search request,
+  // that was sent to root apart from the start_offset & max_hits params.
+  SearchRequest search_request = 5;
+
+  // `DocMapper` as json serialized trait.
+  string doc_mapper = 6;
 }
 
 message FetchDocsResponse {
@@ -280,6 +289,9 @@ message SearchStreamRequest {
 
   // The field by which we want to partition
   optional string partition_by_field = 9;
+
+  // Fields to extract snippet on
+  repeated string  snippet_fields = 10;
 }
 
 message LeafSearchStreamRequest {

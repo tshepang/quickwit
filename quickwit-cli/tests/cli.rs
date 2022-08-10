@@ -306,6 +306,7 @@ async fn test_cmd_search_aggregation() -> Result<()> {
         max_hits: 10,
         start_offset: 0,
         search_fields: Some(vec!["city".to_string()]),
+        snippet_fields: None,
         start_timestamp: None,
         end_timestamp: None,
         config_uri: Uri::try_new(&test_env.resource_files["config"].display().to_string()).unwrap(),

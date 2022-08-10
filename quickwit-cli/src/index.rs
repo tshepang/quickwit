@@ -214,6 +214,7 @@ pub struct SearchIndexArgs {
     pub max_hits: usize,
     pub start_offset: usize,
     pub search_fields: Option<Vec<String>>,
+    pub snippet_fields: Option<Vec<String>>,
     pub start_timestamp: Option<i64>,
     pub end_timestamp: Option<i64>,
     pub config_uri: Uri,
@@ -389,6 +390,9 @@ impl IndexCliCommand {
         let search_fields = matches
             .values_of("search-fields")
             .map(|values| values.map(|value| value.to_string()).collect());
+        let snippet_fields = matches
+            .values_of("snippet-fields")
+            .map(|values| values.map(|value| value.to_string()).collect());
         let start_timestamp = if matches.is_present("start-timestamp") {
             Some(matches.value_of_t::<i64>("start-timestamp")?)
         } else {
@@ -411,6 +415,7 @@ impl IndexCliCommand {
             max_hits,
             start_offset,
             search_fields,
+            snippet_fields,
             start_timestamp,
             end_timestamp,
             config_uri,
@@ -887,6 +892,7 @@ pub async fn search_index(args: SearchIndexArgs) -> anyhow::Result<SearchRespons
         index_id: args.index_id,
         query: args.query.clone(),
         search_fields: args.search_fields.unwrap_or_default(),
+        snippet_fields: args.snippet_fields.unwrap_or_default(),
         start_timestamp: args.start_timestamp,
         end_timestamp: args.end_timestamp,
         max_hits: args.max_hits as u64,

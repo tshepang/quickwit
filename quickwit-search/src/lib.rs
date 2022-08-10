@@ -217,6 +217,8 @@ pub async fn single_node_search(
         leaf_search_response.partial_hits,
         index_storage,
         &split_metadata,
+        doc_mapper.clone(),
+        search_request,
     )
     .await
     .context("Failed to perform fetch docs.")?;
