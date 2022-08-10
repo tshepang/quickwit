@@ -22,6 +22,7 @@ use once_cell::sync::OnceCell;
 use regex::Regex;
 
 mod config;
+mod config_value;
 mod index_config;
 mod source_config;
 mod templating;
@@ -58,6 +59,7 @@ fn validate_identifier(label: &str, value: &str) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+
     use crate::validate_identifier;
 
     #[test]
